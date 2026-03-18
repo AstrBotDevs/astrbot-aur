@@ -25,6 +25,53 @@ require_instance() {
     fi
 }
 
+print_help() {
+    echo "AstrBot Control Tool"
+    echo ""
+    echo "Usage:"
+    echo "  sudo astrbotctl init [-f backup.zip] <name>      # Create a new instance"
+    echo "  sudo astrbotctl cp <src> <dst>                   # Copy an instance"
+    echo "  sudo astrbotctl rm <name>                        # Remove an instance"
+    echo "  astrbotctl start <name>                          # Start via systemd"
+    echo "  astrbotctl stop <name>                           # Stop via systemd"
+    echo "  astrbotctl status <name>                         # Check status"
+    echo "  astrbotctl list                                  # List instances"
+    echo "  astrbotctl password [options] <name>             # Change dashboard password"
+    echo "  astrbotctl export [options] <name>               # Export instance backup"
+    echo "  astrbotctl import [options] <name> <backup_file> # Import instance backup"
+    echo ""
+    echo "Init options:"
+    echo "  -f, --backup <file>  Initialize the instance from a backup archive"
+    echo ""
+    echo "Password options:"
+    echo "  -u, --username <name>  Update dashboard username"
+    echo "  -p, --password <pass>  Set dashboard password non-interactively"
+    echo ""
+    echo "Export options:"
+    echo "  -o, --output <dir>             Output directory"
+    echo "  -S, --gpg-sign                 Sign backup with GPG"
+    echo "  -E, --gpg-encrypt <recipient>  Encrypt for GPG recipient"
+    echo "  -C, --gpg-symmetric            Symmetric encryption"
+    echo "  -d, --digest <algo>            Generate digest"
+    echo ""
+    echo "Import options:"
+    echo "  -y, --yes  Skip confirmation prompts"
+    echo ""
+    echo "Debugging:"
+    echo "  astrbotctl run <name> [astrbot-run-args]     # Run in foreground"
+    echo "  astrbotctl cli <name> [args]                 # Run astrbot command directly"
+}
+
+load_instance_config() {
+    CONF_FILE="$CONFIG_DIR/$instance.conf"
+    ASTRBOT_ROOT="$SYSTEM_ROOT/$instance"
+
+    if [ -f "$CONF_FILE" ]; then
+        # shellcheck disable=SC1090
+        . "$CONF_FILE"
+    fi
+}
+
 run_astrbot() {
     # Set up UV environment
     export UV_CACHE_DIR="$CACHE_DIR/uv"
@@ -66,11 +113,49 @@ run_astrbot() {
 
 case "$cmd" in
 init)
-    require_root
+    shift
+    instance=""
+    BACKUP_FILE=""
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        -f | --backup)
+            if [ -z "$2" ]; then
+                echo "❌ Error: Missing backup file after $1"
+                exit 1
+            fi
+            BACKUP_FILE="$2"
+            shift 2
+            ;;
+        -h | --help)
+            print_help
+            exit 0
+            ;;
+        -*)
+            echo "❌ Error: Unknown option: $1"
+            exit 1
+            ;;
+        *)
+            if [ -n "$instance" ]; then
+                echo "❌ Error: Unexpected extra argument: $1"
+                exit 1
+            fi
+            instance="$1"
+            shift
+            ;;
+        esac
+    done
+
     require_instance
+    require_root
 
     ASTRBOT_ROOT="$SYSTEM_ROOT/$instance"
     CONF_FILE="$CONFIG_DIR/$instance.conf"
+
+    if [ -n "$BACKUP_FILE" ] && [ ! -f "$BACKUP_FILE" ]; then
+        echo "❌ Error: Backup file not found: $BACKUP_FILE"
+        exit 1
+    fi
 
     if [ -d "$ASTRBOT_ROOT" ]; then
         echo "⚠️  Instance data directory already exists: $ASTRBOT_ROOT"
@@ -125,7 +210,11 @@ init)
 
     echo ">>> Bootstrapping AstrBot data..."
     (
-        run_astrbot init -y -b
+        if [ -n "$BACKUP_FILE" ]; then
+            run_astrbot init -y -b -f "$BACKUP_FILE"
+        else
+            run_astrbot init -y -b
+        fi
     )
 
     # Fix permissions for generated files
@@ -221,6 +310,11 @@ cp)
     ;;
 
 rm)
+    if [ "$2" = "-h" ] || [ "$2" = "--help" ]; then
+        echo "Usage: sudo astrbotctl rm <name>"
+        exit 0
+    fi
+
     require_root
     require_instance
 
@@ -271,24 +365,15 @@ run)
     # It can also be called manually for debugging
     require_instance
 
-    CONF_FILE="$CONFIG_DIR/$instance.conf"
-
-    # Default ASTRBOT_ROOT (can be overridden by config)
-    ASTRBOT_ROOT="$SYSTEM_ROOT/$instance"
-
-    # Load configuration
-    # If run via systemd EnvironmentFile, variables might already be set,
-    # but sourcing again ensures consistency if run manually.
-    if [ -f "$CONF_FILE" ]; then
-        # shellcheck disable=SC1090
-        . "$CONF_FILE"
-    fi
+    load_instance_config
 
     if [ ! -d "$ASTRBOT_ROOT" ]; then
         echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist."
         echo "   Run 'sudo astrbotctl init $instance' first."
         exit 1
     fi
+
+    shift 2
 
     echo ">>> Starting AstrBot instance: $instance"
     echo ">>> Host: ${HOST:-0.0.0.0}"
@@ -299,31 +384,240 @@ run)
         --root "$ASTRBOT_ROOT" \
         --host "${HOST:-0.0.0.0}" \
         ${PORT:+--port $PORT} \
-        $EXTRA_ARGS
+        $EXTRA_ARGS \
+        "$@"
     ;;
 
 cli)
     require_instance
 
-    CONF_FILE="$CONFIG_DIR/$instance.conf"
-    # Default ASTRBOT_ROOT
-    ASTRBOT_ROOT="$SYSTEM_ROOT/$instance"
-
-    # Load configuration
-    if [ -f "$CONF_FILE" ]; then
-        # shellcheck disable=SC1090
-        . "$CONF_FILE"
-    fi
+    load_instance_config
 
     shift 2
     run_astrbot "$@"
     ;;
 
 start | stop | restart | enable | disable | status)
+    if [ "$2" = "-h" ] || [ "$2" = "--help" ]; then
+        echo "Usage: astrbotctl $cmd <name>"
+        exit 0
+    fi
+
     require_instance
     # Pass through to systemctl
     # status doesn't need root (usually), others do (via PolicyKit)
     systemctl "$cmd" "astrbot@$instance"
+    ;;
+
+password)
+    shift
+    instance=""
+    PASSWORD_USERNAME=""
+    PASSWORD_VALUE=""
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        -u | --username)
+            if [ -z "$2" ]; then
+                echo "❌ Error: Missing value after $1"
+                exit 1
+            fi
+            PASSWORD_USERNAME="$2"
+            shift 2
+            ;;
+        -p | --password)
+            if [ -z "$2" ]; then
+                echo "❌ Error: Missing value after $1"
+                exit 1
+            fi
+            PASSWORD_VALUE="$2"
+            shift 2
+            ;;
+        -h | --help)
+            echo "Usage: astrbotctl password [-u username] [-p password] <name>"
+            exit 0
+            ;;
+        -*)
+            echo "❌ Error: Unknown option: $1"
+            exit 1
+            ;;
+        *)
+            if [ -n "$instance" ]; then
+                echo "❌ Error: Unexpected extra argument: $1"
+                exit 1
+            fi
+            instance="$1"
+            shift
+            ;;
+        esac
+    done
+
+    require_instance
+    load_instance_config
+
+    if [ ! -d "$ASTRBOT_ROOT" ]; then
+        echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist."
+        exit 1
+    fi
+
+    if [ -n "$PASSWORD_USERNAME" ] && [ -n "$PASSWORD_VALUE" ]; then
+        run_astrbot conf password -u "$PASSWORD_USERNAME" -p "$PASSWORD_VALUE"
+    elif [ -n "$PASSWORD_USERNAME" ]; then
+        run_astrbot conf password -u "$PASSWORD_USERNAME"
+    elif [ -n "$PASSWORD_VALUE" ]; then
+        run_astrbot conf password -p "$PASSWORD_VALUE"
+    else
+        run_astrbot conf password
+    fi
+    ;;
+
+export)
+    shift
+    instance=""
+    EXPORT_OUTPUT=""
+    EXPORT_SIGN=0
+    EXPORT_ENCRYPT=""
+    EXPORT_SYMMETRIC=0
+    EXPORT_DIGEST=""
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        -o | --output)
+            if [ -z "$2" ]; then
+                echo "❌ Error: Missing value after $1"
+                exit 1
+            fi
+            EXPORT_OUTPUT="$2"
+            shift 2
+            ;;
+        -E | --gpg-encrypt)
+            if [ -z "$2" ]; then
+                echo "❌ Error: Missing value after $1"
+                exit 1
+            fi
+            EXPORT_ENCRYPT="$2"
+            shift 2
+            ;;
+        -d | --digest)
+            if [ -z "$2" ]; then
+                echo "❌ Error: Missing value after $1"
+                exit 1
+            fi
+            EXPORT_DIGEST="$2"
+            shift 2
+            ;;
+        -S | --gpg-sign | -C | --gpg-symmetric)
+            if [ "$1" = "-S" ] || [ "$1" = "--gpg-sign" ]; then
+                EXPORT_SIGN=1
+            else
+                EXPORT_SYMMETRIC=1
+            fi
+            shift
+            ;;
+        -h | --help)
+            echo "Usage: astrbotctl export [backup options] <name>"
+            exit 0
+            ;;
+        -*)
+            echo "❌ Error: Unknown option: $1"
+            exit 1
+            ;;
+        *)
+            if [ -n "$instance" ]; then
+                echo "❌ Error: Unexpected extra argument: $1"
+                exit 1
+            fi
+            instance="$1"
+            shift
+            ;;
+        esac
+    done
+
+    require_instance
+    load_instance_config
+
+    if [ ! -d "$ASTRBOT_ROOT" ]; then
+        echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist."
+        exit 1
+    fi
+
+    set -- bk export
+    if [ -n "$EXPORT_OUTPUT" ]; then
+        set -- "$@" -o "$EXPORT_OUTPUT"
+    fi
+    if [ "$EXPORT_SIGN" -eq 1 ]; then
+        set -- "$@" -S
+    fi
+    if [ -n "$EXPORT_ENCRYPT" ]; then
+        set -- "$@" -E "$EXPORT_ENCRYPT"
+    fi
+    if [ "$EXPORT_SYMMETRIC" -eq 1 ]; then
+        set -- "$@" -C
+    fi
+    if [ -n "$EXPORT_DIGEST" ]; then
+        set -- "$@" -d "$EXPORT_DIGEST"
+    fi
+    run_astrbot "$@"
+    ;;
+
+import)
+    shift
+    instance=""
+    backup_file=""
+    IMPORT_YES=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        -y | --yes)
+            IMPORT_YES=1
+            shift
+            ;;
+        -h | --help)
+            echo "Usage: astrbotctl import [-y] <name> <backup_file>"
+            exit 0
+            ;;
+        -*)
+            echo "❌ Error: Unknown option: $1"
+            exit 1
+            ;;
+        *)
+            if [ -z "$instance" ]; then
+                instance="$1"
+            elif [ -z "$backup_file" ]; then
+                backup_file="$1"
+            else
+                echo "❌ Error: Unexpected extra argument: $1"
+                exit 1
+            fi
+            shift
+            ;;
+        esac
+    done
+
+    require_instance
+
+    if [ -z "$backup_file" ]; then
+        echo "❌ Error: Missing backup file."
+        exit 1
+    fi
+
+    if [ ! -f "$backup_file" ]; then
+        echo "❌ Error: Backup file not found: $backup_file"
+        exit 1
+    fi
+
+    load_instance_config
+
+    if [ ! -d "$ASTRBOT_ROOT" ]; then
+        echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist."
+        exit 1
+    fi
+
+    if [ "$IMPORT_YES" -eq 1 ]; then
+        run_astrbot bk import -y "$backup_file"
+    else
+        run_astrbot bk import "$backup_file"
+    fi
     ;;
 
 list)
@@ -337,20 +631,7 @@ list)
     ;;
 
 *)
-    echo "AstrBot Control Tool"
-    echo ""
-    echo "Usage:"
-    echo "  sudo astrbotctl init <name>     # Create a new instance"
-    echo "  sudo astrbotctl cp <src> <dst>  # Copy an instance"
-    echo "  sudo astrbotctl rm <name>       # Remove an instance"
-    echo "  astrbotctl start <name>         # Start via systemd"
-    echo "  astrbotctl stop <name>          # Stop via systemd"
-    echo "  astrbotctl status <name>        # Check status"
-    echo "  astrbotctl list                 # List instances"
-    echo ""
-    echo "Debugging:"
-    echo "  astrbotctl run <name>           # Run in foreground"
-    echo "  astrbotctl cli <name> [args]    # Run astrbot command directly"
+    print_help
     exit 1
     ;;
 esac

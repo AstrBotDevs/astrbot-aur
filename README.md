@@ -50,6 +50,10 @@ The `astrbotctl` utility is the main entry point for managing AstrBot instances.
     ```bash
     sudo astrbotctl init <name>
     ```
+    Or initialize directly from an AstrBot backup archive:
+    ```bash
+    sudo astrbotctl init -f /path/to/backup.zip <name>
+    ```
 - **Copy/Clone instance**:
     ```bash
     sudo astrbotctl cp <source> <dest>
@@ -66,6 +70,21 @@ The `astrbotctl` utility is the main entry point for managing AstrBot instances.
 - **List instances**:
     ```bash
     astrbotctl list
+    ```
+- **Change dashboard credentials quickly**:
+    ```bash
+    astrbotctl password <name>
+    astrbotctl password -u admin -p 'new-password' <name>
+    ```
+- **Export instance backup quickly**:
+    ```bash
+    astrbotctl export <name>
+    astrbotctl export -o /tmp -d sha256 <name>
+    ```
+- **Import backup into an instance quickly**:
+    ```bash
+    astrbotctl import <name> /path/to/backup.zip
+    astrbotctl import -y <name> /path/to/backup.zip.gpg
     ```
 - **Run natively (CLI)**:
     Execute AstrBot commands directly within the instance's environment (e.g., manage plugins).
@@ -217,6 +236,10 @@ paru -S astrbot-git
     ```bash
     sudo astrbotctl init <name>
     ```
+    也可以直接从 AstrBot 备份文件初始化:
+    ```bash
+    sudo astrbotctl init -f /path/to/backup.zip <name>
+    ```
 - **复制/克隆实例**:
     ```bash
     sudo astrbotctl cp <source> <dest>
@@ -233,6 +256,21 @@ paru -S astrbot-git
 - **列出实例**:
     ```bash
     astrbotctl list
+    ```
+- **快速修改控制台账号密码**:
+    ```bash
+    astrbotctl password <name>
+    astrbotctl password -u admin -p 'new-password' <name>
+    ```
+- **快速导出实例备份**:
+    ```bash
+    astrbotctl export <name>
+    astrbotctl export -o /tmp -d sha256 <name>
+    ```
+- **快速导入实例备份**:
+    ```bash
+    astrbotctl import <name> /path/to/backup.zip
+    astrbotctl import -y <name> /path/to/backup.zip.gpg
     ```
 - **原生运行 (CLI)**:
     直接在实例环境中执行 AstrBot 命令（例如管理插件）。
