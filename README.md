@@ -1,15 +1,48 @@
 # astrbot-git
 
+<div align="center">
+  <p>
+    <a href="PKGBUILD"><img alt="AUR" src="https://img.shields.io/badge/AUR-git-1793d1?logo=archlinux&logoColor=white" /></a>
+    <a href="PKGBUILD"><img alt="AGPL-3.0" src="https://img.shields.io/badge/License-AGPL--3.0-red.svg" /></a>
+    <a href="astrbot@.service"><img alt="systemd" src="https://img.shields.io/badge/systemd-template-6a737d" /></a>
+    <a href="astrbotctl"><img alt="CLI" src="https://img.shields.io/badge/CLI-astrbotctl-0ea5e9" /></a>
+  </p>
+</div>
+
+<p align="center">
+  <a href="#overview">Overview</a>
+  · <a href="#install">Install</a>
+  · <a href="#quick-start">Quick Start</a>
+  · <a href="#简体中文速览">简体中文</a>
+</p>
+
 Arch Linux AUR package for [AstrBot](https://github.com/AstrBotDevs/AstrBot).
 
 This package installs the upstream `master` branch under `/opt/astrbot` and provides
 `astrbotctl` plus a systemd template unit for multi-instance deployments.
+
+## Overview
+
+`astrbot-git` packages AstrBot for Arch Linux in a way that is friendly to long-lived, multi-instance deployments.
+
+- upstream source is installed in `/opt/astrbot`
+- instance configs live under `/etc/astrbot`
+- runtime state lives under `/var/lib/astrbot/<name>`
+- `astrbotctl` manages init, service lifecycle, plugins, backups, and sync
 
 ## Install
 
 ```bash
 paru -S astrbot-git
 ```
+
+## 简体中文速览
+
+这是 AstrBot 的 Arch Linux AUR 打包仓库。
+
+- 安装后使用 `astrbotctl` 管理实例。
+- 支持 systemd 模板服务 `astrbot@.service`。
+- 适合单实例和多实例部署。
 
 ## Quick Start
 
