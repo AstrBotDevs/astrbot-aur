@@ -2,58 +2,109 @@
 
 pkgname=astrbot-git
 _pkgname=astrbot
-pkgver=4.20.1.r128.ge8c234f0c
-pkgrel=25
-pkgdesc="Agentic IM Chatbot infrastructure (multi-instance, astrbotctl only)"
+_srcname=AstrBot
+pkgver=4.25.2.r1.g90a3a2171
+pkgrel=1
+
+pkgver() {
+    cd "$srcdir/$_srcname"
+    # Fetch all tags from origin/dev to support describe on all release tags
+    git fetch --tags origin dev 2>/dev/null || true
+    # Try annotated tags first; fall back to commit-based versioning
+    local _ver
+    if _ver=$(git describe --long --tags 2>/dev/null); then
+        # Normalize git describe output like v4.22.2-66-gaa279f0c4 -> 4.22.2.r66.gaa279f0c4
+        printf '%s' "$_ver" | sed 's/\([^-]*-g\)/r\1/;s/-/./g' | sed 's/^v//g'
+    else
+        # No tags reachable — use commit count + short hash
+        printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+    fi
+}
+
+pkgdesc="Agentic IM Chatbot infrastructure with systemd multi-instance support"
 arch=('any')
 url="https://github.com/AstrBotDevs/AstrBot"
 license=('AGPL-3.0-only')
 
-depends=('python' 'uv' 'iproute2')
+depends=('python>=3.12' 'uv')
 makedepends=('git')
+optdepends=('certbot: HTTPS certificate helper for astrbotctl certbot')
 
 provides=("$_pkgname")
 conflicts=("$_pkgname")
 
 source=(
-    "$pkgname::git+$url.git#branch=dev"
+    "git+https://github.com/AstrBotDevs/AstrBot.git#branch=master"
     "astrbotctl"
+    "astrbotctl.functions"
     "astrbot@.service"
-    "config.template"
+    "tmpl.conf"
 )
 
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP'
+    'SKIP'
+    'SKIP'
+    'SKIP'
+    'SKIP')
 
 install=astrbot-git.install
 
-pkgver() {
-    cd "$pkgname"
-    git describe --long --tags 2>/dev/null |
-        sed 's/\([^-]*-g\)/r\1/;s/-/./g' |
-        sed 's/^v//g' ||
-        echo "0.0.0.r$(git rev-list --count HEAD).g$(git rev-parse --short HEAD)"
+check() {
+    cd "$srcdir/$_srcname"
+    local _errcnt=0
+    local _prompt_file="astrbot/core/astr_main_agent_resources.py"
+
+    if [ -f astrbot/core/tools/prompts.py ]; then
+        _prompt_file="astrbot/core/tools/prompts.py"
+    fi
+
+    # Syntax check: compile all .py files in key modules
+    python -m py_compile astrbot/core/astr_main_agent_resources.py || _errcnt=$((_errcnt + 1))
+    python -m py_compile astrbot/dashboard/server.py || _errcnt=$((_errcnt + 1))
+    python -m py_compile astrbot/core/astr_agent_tool_exec.py || _errcnt=$((_errcnt + 1))
+    python -m py_compile "$_prompt_file" || _errcnt=$((_errcnt + 1))
+    python -m py_compile astrbot/core/core_lifecycle.py || _errcnt=$((_errcnt + 1))
+    python -m py_compile astrbot/core/db/sqlite.py || _errcnt=$((_errcnt + 1))
+
+    # Symbol checks (曾炸过的 import 路径)
+    grep -q "class AstrBotDashboard" astrbot/dashboard/server.py || _errcnt=$((_errcnt + 1))
+    if grep -R --include="*.py" -q "BACKGROUND_TASK_WOKE_USER_PROMPT" astrbot/core; then
+        grep -q "BACKGROUND_TASK_WOKE_USER_PROMPT" "$_prompt_file" || _errcnt=$((_errcnt + 1))
+    fi
+    if grep -R --include="*.py" -q "CONVERSATION_HISTORY_INJECT_PREFIX" astrbot/core; then
+        grep -q "CONVERSATION_HISTORY_INJECT_PREFIX" "$_prompt_file" || _errcnt=$((_errcnt + 1))
+    fi
+    grep -q "class AstrBotCoreLifecycle" astrbot/core/core_lifecycle.py || _errcnt=$((_errcnt + 1))
+
+    [ "$_errcnt" -eq 0 ] || {
+        echo "❌ check() failed with $_errcnt error(s)"
+        exit 1
+    }
 }
 
 package() {
-    cd "$pkgname"
+    install -dm755 "$pkgdir/opt/astrbot"
 
-    local _appdir="/opt/$_pkgname"
+    # The VCS source extracts to AstrBot/, while the package name stays lowercase.
+    # Use dotglob so hidden files are included in the application payload.
+    shopt -s dotglob
+    cp -a "$srcdir"/"$_srcname"/* "$pkgdir/opt/astrbot/"
+    shopt -u dotglob
 
-    # 程序本体
-    install -d "$pkgdir$_appdir"
-    cp -r astrbot scripts pyproject.toml README.md LICENSE "$pkgdir$_appdir/"
+    # Store version inside the application directory
+    echo "$pkgver" >"$pkgdir/opt/astrbot/.version"
 
-    # 配置文件模板
-    install -Dm644 "$srcdir/config.template" "$pkgdir$_appdir/config.template"
+    if [ -f "$pkgdir/opt/astrbot/LICENSE" ]; then
+        install -Dm644 "$pkgdir/opt/astrbot/LICENSE" \
+            "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    else
+        install -Dm644 /dev/null "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    fi
 
-    # 控制工具（唯一入口）
-    install -Dm755 "$srcdir/astrbotctl" \
-        "$pkgdir/usr/bin/astrbotctl"
-
-    # systemd
+    install -Dm644 "$srcdir/tmpl.conf" "$pkgdir/etc/astrbot/tmpl.conf"
+    install -Dm755 "$srcdir/astrbotctl" "$pkgdir/usr/bin/astrbotctl"
+    install -Dm644 "$srcdir/astrbotctl.functions" \
+        "$pkgdir/usr/bin/astrbotctl.functions"
     install -Dm644 "$srcdir/astrbot@.service" \
         "$pkgdir/usr/lib/systemd/system/astrbot@.service"
-
-    # license
-    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

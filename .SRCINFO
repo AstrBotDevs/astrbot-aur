@@ -1,21 +1,23 @@
 pkgbase = astrbot-git
-	pkgdesc = Agentic IM Chatbot infrastructure (multi-instance, astrbotctl only)
-	pkgver = 4.20.1.r128.ge8c234f0c
-	pkgrel = 25
+	pkgdesc = Agentic IM Chatbot infrastructure with systemd multi-instance support
+	pkgver = 4.25.2.r1.g90a3a2171
+	pkgrel = 1
 	url = https://github.com/AstrBotDevs/AstrBot
 	install = astrbot-git.install
 	arch = any
 	license = AGPL-3.0-only
 	makedepends = git
-	depends = python
+	depends = python>=3.12
 	depends = uv
-	depends = iproute2
+	optdepends = certbot: HTTPS certificate helper for astrbotctl certbot
 	provides = astrbot
 	conflicts = astrbot
-	source = astrbot-git::git+https://github.com/AstrBotDevs/AstrBot.git#branch=dev
+	source = git+https://github.com/AstrBotDevs/AstrBot.git#branch=master
 	source = astrbotctl
+	source = astrbotctl.functions
 	source = astrbot@.service
-	source = config.template
+	source = tmpl.conf
+	sha256sums = SKIP
 	sha256sums = SKIP
 	sha256sums = SKIP
 	sha256sums = SKIP

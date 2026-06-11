@@ -7,34 +7,40 @@ Type=simple
 User=astrbot
 Group=astrbot
 
-# Runtime Environment
-# UV_CACHE_DIR and UV_PROJECT_ENVIRONMENT are set by astrbotctl,
-# but can be overridden here if needed.
-Environment="ASTRBOT_ROOT=/var/lib/astrbot/%i"
+# Only set what the script cannot derive from the config file.
+# All XDG_*, runtime home, and UV paths are computed by setup_runtime_env()
+# (called inside run_astrbot before the Python process starts).
+Environment="ASTRBOT_SYSTEMD=1"
+Environment="ASTRBOT_DESKTOP_CLIENT=0"
+# UV_CACHE_DIR is set dynamically in setup_runtime_env (per-instance under ASTRBOT_ROOT/.cache/uv).
+Environment="UV_PYTHON_INSTALL_DIR=/var/cache/astrbot/python"
 
-# Instance Configuration
-EnvironmentFile=-/etc/astrbot/%i.conf
+# Working directory: the instance root created by `astrbotctl init`.
+# The script derives all per-instance paths (ASTRBOT_HOME, XDG_*, etc.)
+# from the config file at /etc/astrbot/%i.conf.
+WorkingDirectory=/var/lib/astrbot/%i
 
-# Working directory
-# We set this to the instance data directory for safety,
-# though astrbotctl will cd to /opt/astrbot to find the project.
-WorkingDirectory=/var/lib/astrbot
-
-# Execution
-# The wrapper script handles env setup and cd to /opt/astrbot
-ExecStart=/usr/bin/astrbotctl run %i
+# astrbotctl run reads the config, sets up the full runtime environment,
+# then execs into the instance's Python/uv environment.
+ExecStart=/usr/bin/astrbotctl __run_astrbot %i
 
 Restart=always
-RestartSec=3
+RestartSec=10
 
-# Security Hardening
+# Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 
-# Allow write access to necessary directories
-ReadWritePaths=/var/lib/astrbot /var/cache/astrbot
+# AstrBot writes to: instance data dir, and /opt/astrbot for Rust extension builds.
+# BindPaths + ReadWritePaths make these writable inside the namespace.
+BindPaths=/var/lib/astrbot/%i
+ReadWritePaths=/opt/astrbot
+ReadWritePaths=/var/cache/astrbot/python
+ReadWritePaths=/var/cache/astrbot/cargo
+ReadWritePaths=/var/cache/astrbot/rustup
+ReadWritePaths=/var/cache/astrbot/cargo_target
 
 [Install]
 WantedBy=multi-user.target

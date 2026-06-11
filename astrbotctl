@@ -1,130 +1,54 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
-# Constants
-SYSTEM_ROOT="/var/lib/astrbot"
-CONFIG_DIR="/etc/astrbot"
-APP_DIR="/opt/astrbot"
-CACHE_DIR="/var/cache/astrbot"
+# ─── Locate script and load shared functions ──────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" >/dev/null 2>&1 && pwd || printf '%s' ".")"
+# shellcheck source=astrbotctl.functions
+. "${SCRIPT_DIR}/astrbotctl.functions"
 
-cmd="$1"
-instance="$2"
-
-# Helpers
-require_root() {
-    if [ "$(id -u)" -ne 0 ]; then
-        echo "❌ Error: This command requires root privileges (sudo)."
-        exit 1
-    fi
-}
-
-require_instance() {
-    if [ -z "$instance" ]; then
-        echo "Usage: astrbotctl <command> <instance_name>"
-        exit 1
-    fi
-}
-
-print_help() {
-    echo "AstrBot Control Tool"
-    echo ""
-    echo "Usage:"
-    echo "  sudo astrbotctl init [-f backup.zip] <name>      # Create a new instance"
-    echo "  sudo astrbotctl cp <src> <dst>                   # Copy an instance"
-    echo "  sudo astrbotctl rm <name>                        # Remove an instance"
-    echo "  astrbotctl start <name>                          # Start via systemd"
-    echo "  astrbotctl stop <name>                           # Stop via systemd"
-    echo "  astrbotctl status <name>                         # Check status"
-    echo "  astrbotctl list                                  # List instances"
-    echo "  astrbotctl password [options] <name>             # Change dashboard password"
-    echo "  astrbotctl export [options] <name>               # Export instance backup"
-    echo "  astrbotctl import [options] <name> <backup_file> # Import instance backup"
-    echo ""
-    echo "Init options:"
-    echo "  -f, --backup <file>  Initialize the instance from a backup archive"
-    echo ""
-    echo "Password options:"
-    echo "  -u, --username <name>  Update dashboard username"
-    echo "  -p, --password <pass>  Set dashboard password non-interactively"
-    echo ""
-    echo "Export options:"
-    echo "  -o, --output <dir>             Output directory"
-    echo "  -S, --gpg-sign                 Sign backup with GPG"
-    echo "  -E, --gpg-encrypt <recipient>  Encrypt for GPG recipient"
-    echo "  -C, --gpg-symmetric            Symmetric encryption"
-    echo "  -d, --digest <algo>            Generate digest"
-    echo ""
-    echo "Import options:"
-    echo "  -y, --yes  Skip confirmation prompts"
-    echo ""
-    echo "Debugging:"
-    echo "  astrbotctl run <name> [astrbot-run-args]     # Run in foreground"
-    echo "  astrbotctl cli <name> [args]                 # Run astrbot command directly"
-}
-
-load_instance_config() {
-    CONF_FILE="$CONFIG_DIR/$instance.conf"
-    ASTRBOT_ROOT="$SYSTEM_ROOT/$instance"
-
-    if [ -f "$CONF_FILE" ]; then
-        # shellcheck disable=SC1090
-        . "$CONF_FILE"
-    fi
-}
-
-run_astrbot() {
-    # Set up UV environment
-    export UV_CACHE_DIR="$CACHE_DIR/uv"
-    export UV_PROJECT_ENVIRONMENT="$CACHE_DIR/venv-$instance"
-    export ASTRBOT_SYSTEMD=1
-
-    VENV_PYTHON="$UV_PROJECT_ENVIRONMENT/bin/python"
-    VENV_ASTRBOT="$UV_PROJECT_ENVIRONMENT/bin/astrbot"
-
-    # Ensure environment is initialized
-    if [ ! -x "$VENV_ASTRBOT" ]; then
-        echo ">>> Initializing virtual environment..."
-        # Create venv if missing
-        if [ ! -d "$UV_PROJECT_ENVIRONMENT" ]; then
-            uv venv "$UV_PROJECT_ENVIRONMENT" --python 3.12
-        fi
-
-        # Activate environment for installation
-        export VIRTUAL_ENV="$UV_PROJECT_ENVIRONMENT"
-        export PATH="$VIRTUAL_ENV/bin:$PATH"
-
-        # Install astrbot package
-        uv pip install "$APP_DIR"
-    fi
-
-    # Export ASTRBOT_ROOT if set (usually by run/cli commands)
-    if [ -n "$ASTRBOT_ROOT" ]; then
-        export ASTRBOT_ROOT
-    fi
-
-    # Switch to data directory if available
-    if [ -n "$ASTRBOT_ROOT" ] && [ -d "$ASTRBOT_ROOT" ]; then
-        cd "$ASTRBOT_ROOT"
-    fi
-
-    # Execute AstrBot directly
-    exec "$VENV_ASTRBOT" "$@"
-}
+# ─── Entry point ──────────────────────────────────────────────────────────────
+cmd="${1:-}"
+[ -n "$cmd" ] && shift
 
 case "$cmd" in
-init)
+
+# ── Internal: called by certbot deploy hook ───────────────────────────────────
+__certbot-deploy)
+    instance="${1?}" && shift || exit 1
+    cert_name="${1?}" && shift || exit 1
+    require_root
+    sync_certbot_cert_for_instance "$cert_name"
+    systemctl try-restart "astrbot@${instance}.service" >/dev/null 2>&1 || true
+    ;;
+
+# ── Internal: systemd service entry point ────────────────────────────────────
+__run_astrbot)
+    instance="${1?}" && shift || exit 1
+    load_instance_config
+    run_astrbot run "$@"
+    ;;
+
+# ── cli ───────────────────────────────────────────────────────────────────────
+cli)
+    instance="${1?Usage: astrbotctl cli <instance_name> [args...]}"
     shift
-    instance=""
-    BACKUP_FILE=""
+    require_instance
+    load_instance_config
+    run_astrbot "$@"
+    ;;
+
+# ── init ─────────────────────────────────────────────────────────────────────
+init)
+    backup_file="" instance=""
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
         -f | --backup)
-            if [ -z "$2" ]; then
-                echo "❌ Error: Missing backup file after $1"
+            [ -z "${2:-}" ] && {
+                echo "❌ Error: Missing backup file after $1" >&2
                 exit 1
-            fi
-            BACKUP_FILE="$2"
+            }
+            backup_file="$2"
             shift 2
             ;;
         -h | --help)
@@ -132,14 +56,14 @@ init)
             exit 0
             ;;
         -*)
-            echo "❌ Error: Unknown option: $1"
+            echo "❌ Error: Unknown option: $1" >&2
             exit 1
             ;;
         *)
-            if [ -n "$instance" ]; then
-                echo "❌ Error: Unexpected extra argument: $1"
+            [ -n "$instance" ] && {
+                echo "❌ Error: Unexpected extra argument: $1" >&2
                 exit 1
-            fi
+            }
             instance="$1"
             shift
             ;;
@@ -149,303 +73,366 @@ init)
     require_instance
     require_root
 
-    ASTRBOT_ROOT="$SYSTEM_ROOT/$instance"
-    CONF_FILE="$CONFIG_DIR/$instance.conf"
+    conf_file="${CONFIG_DIR}/${instance}.conf"
+    astrbot_root="${SYSTEM_ROOT}/${instance}"
 
-    if [ -n "$BACKUP_FILE" ] && [ ! -f "$BACKUP_FILE" ]; then
-        echo "❌ Error: Backup file not found: $BACKUP_FILE"
+    [ -n "$backup_file" ] && [ ! -f "$backup_file" ] &&
+        {
+            echo "❌ Error: Backup file not found: $backup_file" >&2
+            exit 1
+        }
+    [ -d "$astrbot_root" ] && {
+        echo "⚠️  Instance data directory already exists: $astrbot_root" >&2
         exit 1
-    fi
-
-    if [ -d "$ASTRBOT_ROOT" ]; then
-        echo "⚠️  Instance data directory already exists: $ASTRBOT_ROOT"
-        exit 1
-    fi
+    }
 
     echo ">>> Initializing instance: $instance"
 
-    # Create data directory with correct ownership (astrbot user)
-    # We assume the 'astrbot' user exists (created by .install script)
-    install -dm755 -o astrbot -g astrbot "$ASTRBOT_ROOT"
+    install -dm755 -o astrbot -g astrbot "$astrbot_root"
+    find_free_port 3000
 
-    # Intelligent port allocation logic
-    # 1. Collect ports used in existing config files
-    # 2. Check active ports via ss
-    PORT=3000
-
-    while :; do
-        # Check if port is already configured in another instance
-        if grep -q "^PORT=$PORT$" "$CONFIG_DIR"/*.conf 2>/dev/null; then
-            PORT=$((PORT + 1))
-            continue
-        fi
-
-        # Check if active port is listening (occupied by running instance or other process)
-        if ss -lntH | awk '{print $4}' | grep -q ":$PORT$"; then
-            PORT=$((PORT + 1))
-            continue
-        fi
-
-        # Found free port
-        break
-    done
-
-    # Write config file using template
-    TEMPLATE_FILE="$APP_DIR/config.template"
-
-    if [ ! -f "$TEMPLATE_FILE" ]; then
-        echo "❌ Error: Config template not found at $TEMPLATE_FILE"
+    tmpl_file="/etc/astrbot/tmpl.conf"
+    [ ! -f "$tmpl_file" ] && {
+        echo "❌ Error: Config template not found at $tmpl_file" >&2
         exit 1
-    fi
+    }
 
-    # Use | as delimiter to avoid issues with slashes in paths
-    # shellcheck disable=SC2016
-    sed -e 's|${INSTANCE_NAME}|'"$instance"'|g' \
-        -e 's|${PORT}|'"$PORT"'|g' \
-        -e 's|${ASTRBOT_ROOT}|'"$ASTRBOT_ROOT"'|g' \
-        "$TEMPLATE_FILE" >"$CONF_FILE"
+    export INSTANCE_NAME="$instance" ASTRBOT_HOST="0.0.0.0" ASTRBOT_PORT ASTRBOT_ROOT="$astrbot_root"
+    envsubst <"$tmpl_file" >"$conf_file"
+    chmod 644 "$conf_file"
 
-    # Secure the config file
-    chmod 644 "$CONF_FILE"
+    # Load so the bootstrap command picks up the right port
+    load_instance_config
 
     echo ">>> Bootstrapping AstrBot data..."
-    (
-        if [ -n "$BACKUP_FILE" ]; then
-            run_astrbot init -y -b -f "$BACKUP_FILE"
-        else
-            run_astrbot init -y -b
-        fi
-    )
+    ensure_instance_env_synced || {
+        echo "❌ Error: Failed to prepare Python environment for instance '$instance'." >&2
+        exit 1
+    }
+    venv_astrbot="$(venv_dir)/bin/astrbot"
+    printf 'Y\nY\n' | run_astrbot_env_cmd "$venv_astrbot" init
+    if [ -n "$backup_file" ]; then
+        run_astrbot_env_cmd "$venv_astrbot" bk import -y "$backup_file"
+    fi
 
-    # Fix permissions for generated files
-    chown -R astrbot:astrbot "$ASTRBOT_ROOT"
+    chown -R astrbot:astrbot "$astrbot_root"
+    local_venv_dir="$(venv_dir)"
+    [ -d "$local_venv_dir" ] && chown -R astrbot:astrbot "$local_venv_dir"
 
     echo "✅ Instance initialized."
-    echo "   Data Directory: $ASTRBOT_ROOT"
-    echo "   Configuration:  $CONF_FILE"
-    echo "   Port:           $PORT"
+    echo "   Data Directory: $astrbot_root"
+    echo "   Configuration:  $conf_file"
+    echo "   Port:           $ASTRBOT_PORT"
     echo ""
     echo "To start the instance:"
     echo "   systemctl start astrbot@$instance"
     ;;
 
+# ── cp ───────────────────────────────────────────────────────────────────────
 cp)
     require_root
-    # usage: astrbotctl cp <src> <dest>
-    SRC_INSTANCE="$2"
-    DEST_INSTANCE="$3"
+    src="${2?Usage: astrbotctl cp <source_instance> <dest_instance>}"
+    dst="${3?Usage: astrbotctl cp <source_instance> <dest_instance>}"
 
-    if [ -z "$SRC_INSTANCE" ] || [ -z "$DEST_INSTANCE" ]; then
-        echo "Usage: astrbotctl cp <source_instance> <dest_instance>"
+    src_root="${SYSTEM_ROOT}/${src}"
+    dst_root="${SYSTEM_ROOT}/${dst}"
+    dst_conf="${CONFIG_DIR}/${dst}.conf"
+
+    [ ! -d "$src_root" ] && {
+        echo "❌ Error: Source instance '$src' does not exist." >&2
         exit 1
-    fi
-
-    SRC_ROOT="$SYSTEM_ROOT/$SRC_INSTANCE"
-    DEST_ROOT="$SYSTEM_ROOT/$DEST_INSTANCE"
-    DEST_CONF="$CONFIG_DIR/$DEST_INSTANCE.conf"
-
-    if [ ! -d "$SRC_ROOT" ]; then
-        echo "❌ Error: Source instance '$SRC_INSTANCE' does not exist."
+    }
+    [ -d "$dst_root" ] && {
+        echo "❌ Error: Destination directory '$dst_root' already exists." >&2
         exit 1
-    fi
-
-    if [ -d "$DEST_ROOT" ]; then
-        echo "❌ Error: Destination instance directory '$DEST_ROOT' already exists."
+    }
+    [ -f "$dst_conf" ] && {
+        echo "❌ Error: Destination config '$dst_conf' already exists." >&2
         exit 1
-    fi
+    }
 
-    if [ -f "$DEST_CONF" ]; then
-        echo "❌ Error: Destination config '$DEST_CONF' already exists."
-        exit 1
-    fi
-
-    echo ">>> Copying instance: $SRC_INSTANCE -> $DEST_INSTANCE"
-
-    # Copy data directory
+    echo ">>> Copying instance: $src -> $dst"
     echo "    Copying data directory..."
-    cp -r "$SRC_ROOT" "$DEST_ROOT"
+    cp -r "$src_root" "$dst_root"
+    chown -R astrbot:astrbot "$dst_root"
 
-    # Fix permissions
-    chown -R astrbot:astrbot "$DEST_ROOT"
+    # Reuse unified port allocation
+    instance="$src"
+    load_instance_config
+    instance="$dst"
+    find_free_port 3000
 
-    # Find new port (reuse logic from init)
-    PORT=3000
-    while :; do
-        if grep -q "^PORT=$PORT$" "$CONFIG_DIR"/*.conf 2>/dev/null; then
-            PORT=$((PORT + 1))
-            continue
-        fi
-
-        if ss -lntH | awk '{print $4}' | grep -q ":$PORT$"; then
-            PORT=$((PORT + 1))
-            continue
-        fi
-        break
-    done
-
-    # Write new config
-    TEMPLATE_FILE="$APP_DIR/config.template"
-    if [ ! -f "$TEMPLATE_FILE" ]; then
-        echo "❌ Error: Config template not found at $TEMPLATE_FILE"
-        # Cleanup
-        rm -rf "$DEST_ROOT"
+    tmpl_file="/etc/astrbot/tmpl.conf"
+    [ ! -f "$tmpl_file" ] && {
+        echo "❌ Error: Config template not found at $tmpl_file" >&2
+        rm -rf "$dst_root"
         exit 1
-    fi
+    }
 
-    # shellcheck disable=SC2016
-    sed -e 's|${INSTANCE_NAME}|'"$DEST_INSTANCE"'|g' \
-        -e 's|${PORT}|'"$PORT"'|g' \
-        -e 's|${ASTRBOT_ROOT}|'"$DEST_ROOT"'|g' \
-        "$TEMPLATE_FILE" >"$DEST_CONF"
-
-    chmod 644 "$DEST_CONF"
+    export INSTANCE_NAME="$dst" ASTRBOT_HOST="${ASTRBOT_HOST:-0.0.0.0}" \
+        ASTRBOT_PORT ASTRBOT_ROOT="$dst_root"
+    envsubst <"$tmpl_file" >"$dst_conf"
+    chmod 644 "$dst_conf"
 
     echo "✅ Instance copied."
-    echo "   Source: $SRC_INSTANCE"
-    echo "   Dest:   $DEST_INSTANCE"
-    echo "   Port:   $PORT"
+    echo "   Source: $src  →  Dest: $dst"
+    echo "   Port: $ASTRBOT_PORT"
     echo ""
     echo "To start the new instance:"
-    echo "   systemctl start astrbot@$DEST_INSTANCE"
+    echo "   systemctl start astrbot@$dst"
     ;;
 
+# ── rm ────────────────────────────────────────────────────────────────────────
 rm)
-    if [ "$2" = "-h" ] || [ "$2" = "--help" ]; then
+    [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && {
         echo "Usage: sudo astrbotctl rm <name>"
         exit 0
-    fi
-
+    }
+    instance="${1:-}"
     require_root
     require_instance
 
-    ASTRBOT_ROOT="$SYSTEM_ROOT/$instance"
-    CONF_FILE="$CONFIG_DIR/$instance.conf"
-    VENV_DIR="$CACHE_DIR/venv-$instance"
+    conf_file="$(conf_file)"
+    venv_dir="$(venv_dir)"
 
-    # Check if instance exists (either data dir or config)
-    if [ ! -d "$ASTRBOT_ROOT" ] && [ ! -f "$CONF_FILE" ]; then
-        echo "❌ Error: Instance '$instance' does not exist."
-        exit 1
+    if [ -f "$conf_file" ]; then
+        load_instance_config
+        certbot_managed="${ASTRBOT_CERTBOT_MANAGED:-}"
+        certbot_cert_name="${ASTRBOT_CERTBOT_CERT_NAME:-}"
     fi
+
+    [ ! -d "$ASTRBOT_ROOT" ] && [ ! -f "$conf_file" ] &&
+        {
+            echo "❌ Error: Instance '$instance' does not exist." >&2
+            exit 1
+        }
 
     echo ">>> Removing instance: $instance"
 
-    # Stop and disable service
-    if systemctl is-active --quiet "astrbot@$instance"; then
-        echo "    Stopping service..."
-        systemctl stop "astrbot@$instance"
-    fi
+    systemctl is-active --quiet "astrbot@$instance" 2>/dev/null &&
+        {
+            echo "    Stopping service..."
+            systemctl stop "astrbot@$instance"
+        }
+    systemctl is-enabled --quiet "astrbot@$instance" 2>/dev/null &&
+        {
+            echo "    Disabling service..."
+            systemctl disable "astrbot@$instance"
+        }
 
-    if systemctl is-enabled --quiet "astrbot@$instance" 2>/dev/null; then
-        echo "    Disabling service..."
-        systemctl disable "astrbot@$instance"
-    fi
-
-    # Remove files
-    if [ -d "$ASTRBOT_ROOT" ]; then
+    [ -d "$ASTRBOT_ROOT" ] && {
         echo "    Removing data directory: $ASTRBOT_ROOT"
         rm -rf "$ASTRBOT_ROOT"
-    fi
+    }
+    [ -f "$conf_file" ] && {
+        echo "    Removing configuration: $conf_file"
+        rm -f "$conf_file"
+    }
+    [ -d "$venv_dir" ] && {
+        echo "    Removing venv: $venv_dir"
+        rm -rf "$venv_dir"
+    }
+    [ -f "$(certbot_hook_path)" ] && {
+        echo "    Removing certbot hook: $(certbot_hook_path)"
+        rm -f "$(certbot_hook_path)"
+    }
+    [ -d "$(certbot_instance_cert_dir)" ] &&
+        {
+            echo "    Removing cert copy: $(certbot_instance_cert_dir)"
+            rm -rf "$(certbot_instance_cert_dir)"
+        }
 
-    if [ -f "$CONF_FILE" ]; then
-        echo "    Removing configuration: $CONF_FILE"
-        rm -f "$CONF_FILE"
-    fi
-
-    if [ -d "$VENV_DIR" ]; then
-        echo "    Removing virtual environment: $VENV_DIR"
-        rm -rf "$VENV_DIR"
+    if [ "$certbot_managed" = "true" ] && [ -n "$certbot_cert_name" ] &&
+        command -v certbot >/dev/null 2>&1; then
+        echo "    Removing certbot cert: $certbot_cert_name"
+        certbot delete --non-interactive --cert-name "$certbot_cert_name" >/dev/null 2>&1 || true
     fi
 
     echo "✅ Instance '$instance' removed."
     ;;
 
-run)
-    # This is typically called by systemd (User=astrbot)
-    # It can also be called manually for debugging
+# ── reset ─────────────────────────────────────────────────────────────────────
+reset)
+    [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && {
+        echo "Usage: sudo astrbotctl reset <name>"
+        exit 0
+    }
+    instance="${1:-}"
+    require_root
     require_instance
 
-    load_instance_config
-
-    if [ ! -d "$ASTRBOT_ROOT" ]; then
-        echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist."
-        echo "   Run 'sudo astrbotctl init $instance' first."
-        exit 1
-    fi
-
-    shift 2
-
-    echo ">>> Starting AstrBot instance: $instance"
-    echo ">>> Host: ${HOST:-0.0.0.0}"
-    echo ">>> Port: ${PORT:-default}"
-
-    # shellcheck disable=SC2086
-    run_astrbot run \
-        --root "$ASTRBOT_ROOT" \
-        --host "${HOST:-0.0.0.0}" \
-        ${PORT:+--port $PORT} \
-        $EXTRA_ARGS \
-        "$@"
-    ;;
-
-cli)
-    require_instance
-
-    load_instance_config
-
-    shift 2
-    run_astrbot "$@"
-    ;;
-
-start | stop | restart | enable | disable | status)
-    if [ "$2" = "-h" ] || [ "$2" = "--help" ]; then
-        echo "Usage: astrbotctl $cmd <name>"
+    if render_config_from_template; then
+        command -v systemctl >/dev/null 2>&1 &&
+            systemctl try-reload-or-restart "astrbot@$instance" 2>/dev/null || true
         exit 0
     fi
+    exit 1
+    ;;
 
+# ── certbot ───────────────────────────────────────────────────────────────────
+certbot)
+    [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && {
+        echo "Usage: sudo astrbotctl certbot <name>"
+        exit 0
+    }
+    instance="${1:-}"
+    require_root
     require_instance
-    # Pass through to systemctl
-    # status doesn't need root (usually), others do (via PolicyKit)
+
+    command -v certbot >/dev/null 2>&1 || {
+        echo "❌ Error: certbot is not installed." >&2
+        exit 1
+    }
+
+    load_instance_config
+    conf_file="$(conf_file)"
+
+    [ ! -d "$ASTRBOT_ROOT" ] || [ ! -f "$conf_file" ] &&
+        {
+            echo "❌ Error: Instance '$instance' is not initialized." >&2
+            exit 1
+        }
+
+    domains="${ASTRBOT_CERTBOT_DOMAINS:-}"
+    email="${ASTRBOT_CERTBOT_EMAIL:-}"
+    cert_name="astrbot-${instance}"
+
+    printf "Domains for %s (space-separated) [%s]: " "$instance" "$domains"
+    read -r d && [ -z "$d" ] && d="$domains"
+    [ -z "$d" ] && {
+        echo "❌ Error: At least one domain is required." >&2
+        exit 1
+    }
+    domains="$d"
+
+    printf "Email for Let's Encrypt notices [%s]: " "$email"
+    read -r e && [ -z "$e" ] && e="$email"
+    [ -z "$e" ] && {
+        echo "❌ Error: Email is required." >&2
+        exit 1
+    }
+    email="$e"
+
+    # Build -d arguments
+    domain_args=""
+    for domain in $domains; do
+        domain_args="$domain_args -d $domain"
+    done
+
+    ss -lntH "( sport = :80 )" 2>/dev/null | grep -q . && {
+        echo "❌ Error: Port 80 is in use. Stop the process using it, then retry." >&2
+        exit 1
+    }
+
+    echo ">>> Requesting Let's Encrypt certificate..."
+    # shellcheck disable=SC2086
+    certbot certonly \
+        --standalone --preferred-challenges http --http-01-port 80 \
+        --agree-tos --non-interactive \
+        --email "$email" --cert-name "$cert_name" $domain_args
+
+    sync_certbot_cert_for_instance "$cert_name"
+
+    cert_dir="$(certbot_instance_cert_dir)"
+    cert_file="$cert_dir/fullchain.pem"
+    key_file="$cert_dir/privkey.pem"
+
+    upsert_conf_var "$conf_file" "ASTRBOT_DASHBOARD_SSL_ENABLE" "true"
+    upsert_conf_var "$conf_file" "ASTRBOT_SSL_CERT" "$cert_file"
+    upsert_conf_var "$conf_file" "ASTRBOT_SSL_KEY" "$key_file"
+    upsert_conf_var "$conf_file" "ASTRBOT_CERTBOT_MANAGED" "true"
+    upsert_conf_var "$conf_file" "ASTRBOT_CERTBOT_CERT_NAME" "$cert_name"
+    upsert_conf_var "$conf_file" "ASTRBOT_CERTBOT_DOMAINS" "$domains"
+    upsert_conf_var "$conf_file" "ASTRBOT_CERTBOT_EMAIL" "$email"
+
+    install_certbot_deploy_hook "$cert_name"
+    enable_certbot_renew_timer || true
+
+    echo ">>> Restarting astrbot instance: $instance"
+    systemctl restart "astrbot@$instance"
+
+    echo "✅ HTTPS configured for '$instance'"
+    echo "   Certificate: $cert_file"
+    echo "   Private key: $key_file"
+    echo "   Renewal hook: $(certbot_hook_path)"
+    ;;
+
+# ── run ───────────────────────────────────────────────────────────────────────
+run)
+    instance="${1?Usage: astrbotctl run <instance_name> [args...]}"
+    shift
+    require_instance
+    load_instance_config
+
+    [ ! -d "$ASTRBOT_ROOT" ] && {
+        echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist." >&2
+        echo "   Run 'sudo astrbotctl init $instance' first." >&2
+        exit 1
+    }
+
+    echo ">>> Starting AstrBot instance: $instance"
+
+    run_astrbot run "$@"
+    ;;
+
+# ── paths ─────────────────────────────────────────────────────────────────────
+paths)
+    [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && {
+        echo "Usage: astrbotctl paths <name>"
+        exit 0
+    }
+    instance="${1:-}"
+    require_instance
+    load_instance_config
+    print_paths
+    ;;
+
+# ── start / stop / restart / enable / disable / status ────────────────────────
+start | stop | restart | enable | disable | status)
+    [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && {
+        echo "Usage: astrbotctl $cmd <name>"
+        exit 0
+    }
+    instance="${1:-}"
+    require_instance
     systemctl "$cmd" "astrbot@$instance"
     ;;
 
-password)
-    shift
-    instance=""
-    PASSWORD_USERNAME=""
-    PASSWORD_VALUE=""
+# ── admin ─────────────────────────────────────────────────────────────────────
+admin)
+    username="" password="" instance=""
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
         -u | --username)
-            if [ -z "$2" ]; then
-                echo "❌ Error: Missing value after $1"
+            [ -z "${2:-}" ] && {
+                echo "❌ Error: Missing value after $1" >&2
                 exit 1
-            fi
-            PASSWORD_USERNAME="$2"
+            }
+            username="$2"
             shift 2
             ;;
         -p | --password)
-            if [ -z "$2" ]; then
-                echo "❌ Error: Missing value after $1"
+            [ -z "${2:-}" ] && {
+                echo "❌ Error: Missing value after $1" >&2
                 exit 1
-            fi
-            PASSWORD_VALUE="$2"
+            }
+            password="$2"
             shift 2
             ;;
         -h | --help)
-            echo "Usage: astrbotctl password [-u username] [-p password] <name>"
+            echo "Usage: astrbotctl admin [-u username] [-p password] <name>"
             exit 0
             ;;
         -*)
-            echo "❌ Error: Unknown option: $1"
+            echo "❌ Error: Unknown option: $1" >&2
             exit 1
             ;;
         *)
-            if [ -n "$instance" ]; then
-                echo "❌ Error: Unexpected extra argument: $1"
+            [ -n "$instance" ] && {
+                echo "❌ Error: Unexpected extra argument: $1" >&2
                 exit 1
-            fi
+            }
             instance="$1"
             shift
             ;;
@@ -454,79 +441,78 @@ password)
 
     require_instance
     load_instance_config
-
-    if [ ! -d "$ASTRBOT_ROOT" ]; then
-        echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist."
+    [ ! -d "$ASTRBOT_ROOT" ] && {
+        echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist." >&2
         exit 1
-    fi
+    }
 
-    if [ -n "$PASSWORD_USERNAME" ] && [ -n "$PASSWORD_VALUE" ]; then
-        run_astrbot conf password -u "$PASSWORD_USERNAME" -p "$PASSWORD_VALUE"
-    elif [ -n "$PASSWORD_USERNAME" ]; then
-        run_astrbot conf password -u "$PASSWORD_USERNAME"
-    elif [ -n "$PASSWORD_VALUE" ]; then
-        run_astrbot conf password -p "$PASSWORD_VALUE"
-    else
-        run_astrbot conf password
+    # conf is a top-level astrbot subcommand, not a subcommand of 'run'.
+    # We bypass run_astrbot and invoke astrbot directly.
+    setup_runtime_env
+    cd "$ASTRBOT_ROOT" || exit
+    if [ -n "$username" ]; then
+        "$UV_PROJECT_ENVIRONMENT/bin/astrbot" conf set dashboard.username "$username"
+    fi
+    if [ -n "$password" ]; then
+        "$UV_PROJECT_ENVIRONMENT/bin/astrbot" conf set dashboard.password "$password"
+    fi
+    if [ -z "$username" ] && [ -z "$password" ]; then
+        echo "❌ Error: Must provide at least one of -u/--username or -p/--password" >&2
+        exit 1
     fi
     ;;
 
+# ── export ─────────────────────────────────────────────────────────────────────
 export)
-    shift
-    instance=""
-    EXPORT_OUTPUT=""
-    EXPORT_SIGN=0
-    EXPORT_ENCRYPT=""
-    EXPORT_SYMMETRIC=0
-    EXPORT_DIGEST=""
+    output_dir="" sign=0 encrypt="" symmetric=0 digest="" instance=""
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
         -o | --output)
-            if [ -z "$2" ]; then
-                echo "❌ Error: Missing value after $1"
+            [ -z "${2:-}" ] && {
+                echo "❌ Error: Missing output dir after $1" >&2
                 exit 1
-            fi
-            EXPORT_OUTPUT="$2"
+            }
+            output_dir="$2"
             shift 2
             ;;
         -E | --gpg-encrypt)
-            if [ -z "$2" ]; then
-                echo "❌ Error: Missing value after $1"
+            [ -z "${2:-}" ] && {
+                echo "❌ Error: Missing recipient after $1" >&2
                 exit 1
-            fi
-            EXPORT_ENCRYPT="$2"
+            }
+            encrypt="$2"
             shift 2
             ;;
         -d | --digest)
-            if [ -z "$2" ]; then
-                echo "❌ Error: Missing value after $1"
+            [ -z "${2:-}" ] && {
+                echo "❌ Error: Missing algorithm after $1" >&2
                 exit 1
-            fi
-            EXPORT_DIGEST="$2"
+            }
+            digest="$2"
             shift 2
             ;;
-        -S | --gpg-sign | -C | --gpg-symmetric)
-            if [ "$1" = "-S" ] || [ "$1" = "--gpg-sign" ]; then
-                EXPORT_SIGN=1
-            else
-                EXPORT_SYMMETRIC=1
-            fi
+        -S | --gpg-sign)
+            sign=1
+            shift
+            ;;
+        -C | --gpg-symmetric)
+            symmetric=1
             shift
             ;;
         -h | --help)
-            echo "Usage: astrbotctl export [backup options] <name>"
+            echo "Usage: astrbotctl export [options] <name>"
             exit 0
             ;;
         -*)
-            echo "❌ Error: Unknown option: $1"
+            echo "❌ Error: Unknown option: $1" >&2
             exit 1
             ;;
         *)
-            if [ -n "$instance" ]; then
-                echo "❌ Error: Unexpected extra argument: $1"
+            [ -n "$instance" ] && {
+                echo "❌ Error: Unexpected extra argument: $1" >&2
                 exit 1
-            fi
+            }
             instance="$1"
             shift
             ;;
@@ -535,41 +521,29 @@ export)
 
     require_instance
     load_instance_config
-
-    if [ ! -d "$ASTRBOT_ROOT" ]; then
-        echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist."
+    [ ! -d "$ASTRBOT_ROOT" ] && {
+        echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist." >&2
         exit 1
-    fi
+    }
 
-    set -- bk export
-    if [ -n "$EXPORT_OUTPUT" ]; then
-        set -- "$@" -o "$EXPORT_OUTPUT"
-    fi
-    if [ "$EXPORT_SIGN" -eq 1 ]; then
-        set -- "$@" -S
-    fi
-    if [ -n "$EXPORT_ENCRYPT" ]; then
-        set -- "$@" -E "$EXPORT_ENCRYPT"
-    fi
-    if [ "$EXPORT_SYMMETRIC" -eq 1 ]; then
-        set -- "$@" -C
-    fi
-    if [ -n "$EXPORT_DIGEST" ]; then
-        set -- "$@" -d "$EXPORT_DIGEST"
-    fi
-    run_astrbot "$@"
+    # shellcheck disable=SC2206
+    cmd_args=(bk export)
+    [ -n "$output_dir" ] && cmd_args+=(-o "$output_dir")
+    [ "$sign" -eq 1 ] && cmd_args+=(-S)
+    [ -n "$encrypt" ] && cmd_args+=(-E "$encrypt")
+    [ "$symmetric" -eq 1 ] && cmd_args+=(-C)
+    [ -n "$digest" ] && cmd_args+=(-d "$digest")
+    run_astrbot "${cmd_args[@]}"
     ;;
 
+# ── import ─────────────────────────────────────────────────────────────────────
 import)
-    shift
-    instance=""
-    backup_file=""
-    IMPORT_YES=0
+    backup_file="" yes=0 instance=""
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
         -y | --yes)
-            IMPORT_YES=1
+            yes=1
             shift
             ;;
         -h | --help)
@@ -577,59 +551,469 @@ import)
             exit 0
             ;;
         -*)
-            echo "❌ Error: Unknown option: $1"
+            echo "❌ Error: Unknown option: $1" >&2
             exit 1
             ;;
         *)
-            if [ -z "$instance" ]; then
-                instance="$1"
-            elif [ -z "$backup_file" ]; then
+            [ -z "$instance" ] && {
+                instance="$backup_file"
+                shift
+                continue
+            }
+            [ -z "$backup_file" ] && {
                 backup_file="$1"
-            else
-                echo "❌ Error: Unexpected extra argument: $1"
-                exit 1
-            fi
-            shift
+                shift
+                continue
+            }
+            echo "❌ Error: Unexpected extra argument: $1" >&2
+            exit 1
             ;;
         esac
     done
 
     require_instance
-
-    if [ -z "$backup_file" ]; then
-        echo "❌ Error: Missing backup file."
+    [ -z "$backup_file" ] && {
+        echo "❌ Error: Missing backup file." >&2
         exit 1
-    fi
-
-    if [ ! -f "$backup_file" ]; then
-        echo "❌ Error: Backup file not found: $backup_file"
+    }
+    [ ! -f "$backup_file" ] && {
+        echo "❌ Error: Backup file not found: $backup_file" >&2
         exit 1
-    fi
-
+    }
     load_instance_config
-
-    if [ ! -d "$ASTRBOT_ROOT" ]; then
-        echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist."
+    [ ! -d "$ASTRBOT_ROOT" ] && {
+        echo "❌ Error: Instance directory $ASTRBOT_ROOT does not exist." >&2
         exit 1
-    fi
+    }
 
-    if [ "$IMPORT_YES" -eq 1 ]; then
-        run_astrbot bk import -y "$backup_file"
-    else
-        run_astrbot bk import "$backup_file"
-    fi
+    run_astrbot bk import ${yes:+-y} "$backup_file"
     ;;
 
-list)
+# ── ls ────────────────────────────────────────────────────────────────────────
+ls)
     echo "=== AstrBot Instances ==="
-    if [ -d "$SYSTEM_ROOT" ]; then
-        # List subdirectories in /var/lib/astrbot
-        ls -1 "$SYSTEM_ROOT" 2>/dev/null || echo "(No instances found)"
+    instances=$(iter_instances)
+    if [ -n "$instances" ]; then
+        printf '%s\n' "$instances"
     else
         echo "(No instances found)"
     fi
     ;;
 
+# ── clean ─────────────────────────────────────────────────────────────────────
+clean)
+    require_root
+
+    echo "=== AstrBot Clean ==="
+    echo ""
+
+    # Update snapshots
+    if [ -d "$CACHE_DIR/update-snapshots" ]; then
+        echo "  [1] Update snapshots: $CACHE_DIR/update-snapshots ($(du -sh "$CACHE_DIR/update-snapshots" 2>/dev/null | cut -f1))"
+    fi
+
+    # Cargo cache
+    if [ -d "/var/lib/astrbot/.cargo" ]; then
+        echo "  [2] Cargo cache: /var/lib/astrbot/.cargo ($(du -sh /var/lib/astrbot/.cargo 2>/dev/null | cut -f1))"
+    fi
+
+    # Rustup cache
+    if [ -d "/var/lib/astrbot/.rustup" ]; then
+        echo "  [3] Rustup cache: /var/lib/astrbot/.rustup ($(du -sh /var/lib/astrbot/.rustup 2>/dev/null | cut -f1))"
+    fi
+
+    # Instance virtualenvs
+    total_venvs=$(find "$SYSTEM_ROOT" -mindepth 2 -maxdepth 2 -type d -name '.venv' 2>/dev/null | wc -l)
+    if [ "$total_venvs" -gt 0 ]; then
+        venv_total_size=$(find "$SYSTEM_ROOT" -mindepth 2 -maxdepth 2 -type d -name '.venv' -exec du -ch {} + 2>/dev/null | tail -1 | cut -f1)
+        echo "  [4] Instance venvs: $SYSTEM_ROOT/*/.venv (total: ${venv_total_size:-unknown})"
+    fi
+
+    # UV cache
+    if [ -d "$CACHE_DIR/uv" ]; then
+        echo "  [5] UV cache: $CACHE_DIR/uv ($(du -sh "$CACHE_DIR/uv" 2>/dev/null | cut -f1))"
+    fi
+
+    echo ""
+    echo "  [a] All of the above"
+    echo "  [q] Quit (no action)"
+    echo ""
+    printf "Select items to clean (e.g. 1 3 5): "
+    read -r choices
+
+    [ "$choices" = "q" ] && exit 0
+
+    for choice in $choices; do
+        case "$choice" in
+        1)
+            echo ">>> Removing update snapshots..."
+            rm -rf "$CACHE_DIR/update-snapshots"
+            mkdir -p "$CACHE_DIR/update-snapshots"
+            ;;
+        2)
+            echo ">>> Removing cargo cache..."
+            rm -rf /var/lib/astrbot/.cargo
+            ;;
+        3)
+            echo ">>> Removing rustup cache..."
+            rm -rf /var/lib/astrbot/.rustup
+            ;;
+        4)
+            echo ">>> Removing all instance venvs..."
+            find "$SYSTEM_ROOT" -mindepth 2 -maxdepth 2 -type d -name '.venv' -exec rm -rf {} +
+            ;;
+        5)
+            echo ">>> Removing UV cache..."
+            rm -rf "$CACHE_DIR/uv"
+            ;;
+        a)
+            echo ">>> Removing all caches..."
+            rm -rf "$CACHE_DIR/update-snapshots"
+            mkdir -p "$CACHE_DIR/update-snapshots"
+            rm -rf /var/lib/astrbot/.cargo
+            rm -rf /var/lib/astrbot/.rustup
+            rm -rf "$CACHE_DIR/uv"
+            ;;
+        q) exit 0 ;;
+        esac
+    done
+    echo ""
+    echo "✅ Done. Note: venvs will be rebuilt on next run."
+    ;;
+
+# ── sync ──────────────────────────────────────────────────────────────────────
+sync)
+    instance="" all=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        --all)
+            all=1
+            shift
+            ;;
+        -h | --help)
+            cat <<'USAGE'
+Usage: sudo astrbotctl sync [instance|--all]
+
+Refresh instance virtualenvs from the packaged AstrBot code in /opt/astrbot.
+Use this if /opt/astrbot has been updated but an instance still appears to run old code.
+
+Options:
+  --all      Sync all instances
+  -h, --help Show this help
+USAGE
+            exit 0
+            ;;
+        -*)
+            echo "❌ Error: Unknown option: $1" >&2
+            exit 1
+            ;;
+        *)
+            [ -n "$instance" ] && {
+                echo "❌ Error: Unexpected extra argument: $1" >&2
+                exit 1
+            }
+            instance="$1"
+            shift
+            ;;
+        esac
+    done
+
+    require_root
+
+    if [ "$all" -eq 1 ]; then
+        instances=$(iter_instances)
+        [ -z "$instances" ] && {
+            echo ">>> No instances found."
+            exit 0
+        }
+        echo ">>> Syncing all instances: $instances"
+    else
+        [ -z "$instance" ] && {
+            echo "❌ Error: Instance name or --all required." >&2
+            exit 1
+        }
+        instances="$instance"
+        require_instance
+        echo ">>> Syncing instance: $instance"
+    fi
+
+    _sync_instance() {
+        local inst="$1" was_active=0
+        local venv_dir_path venv_backup_path had_backup=0
+        instance="$inst"
+        load_instance_config
+
+        if [ ! -d "$ASTRBOT_ROOT" ]; then
+            echo "⚠️  Instance $inst directory missing, skipping."
+            return 0
+        fi
+
+        venv_dir_path="$(venv_dir)"
+        venv_backup_path="${UPDATE_SNAPSHOT_DIR}/${inst}-venv-backup"
+
+        # Backup current venv before sync
+        if [ "$UPDATE_AUTO_ROLLBACK" = "1" ] && [ -d "$venv_dir_path" ]; then
+            echo ">>> Backing up current venv..."
+            rm -rf "$venv_backup_path" 2>/dev/null || true
+            mkdir -p "$(dirname "$venv_backup_path")"
+            cp -a "$venv_dir_path" "$venv_backup_path"
+            had_backup=1
+        fi
+
+        if systemctl is-active --quiet "astrbot@$inst" 2>/dev/null; then
+            was_active=1
+            echo ">>> Stopping active service: $inst"
+            systemctl stop "astrbot@$inst"
+        fi
+
+        if ! ensure_instance_env_synced 2>&1; then
+            echo "⚠️  Failed to sync environment for $inst"
+            if [ "$had_backup" -eq 1 ]; then
+                echo ">>> Restoring previous venv from backup..."
+                rm -rf "$venv_dir_path" 2>/dev/null || true
+                cp -a "$venv_backup_path" "$venv_dir_path"
+            fi
+            rm -rf "$venv_backup_path" 2>/dev/null || true
+            return 1
+        fi
+
+        # Sync succeeded — discard backup
+        rm -rf "$venv_backup_path" 2>/dev/null || true
+
+        if [ "$was_active" -eq 1 ]; then
+            echo ">>> Restarting service: $inst"
+            if ! systemctl start "astrbot@$inst"; then
+                echo "⚠️  Failed to restart $inst"
+                return 1
+            fi
+        fi
+
+        echo "✅ Synced instance: $inst"
+        return 0
+    }
+
+    FAILED_INSTANCES=""
+    for inst in $instances; do
+        if ! _sync_instance "$inst"; then
+            FAILED_INSTANCES="$FAILED_INSTANCES $inst"
+        fi
+    done
+
+    echo ""
+    if [ -n "$FAILED_INSTANCES" ]; then
+        echo "=== ❌ Sync failed for some instances ==="
+        echo "    Failed instances:$FAILED_INSTANCES"
+        exit 1
+    else
+        echo "=== ✅ Sync complete ==="
+    fi
+    ;;
+
+# ── update ───────────────────────────────────────────────────────────────────
+update)
+    instance="" all=0 stability_secs="${UPDATE_STABILITY_SECS:-60}"
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        --all)
+            all=1
+            shift
+            ;;
+        --stability-secs)
+            stability_secs="${2:?}"
+            shift 2
+            ;;
+        -h | --help)
+            cat <<'USAGE'
+Usage: sudo astrbotctl update [instance|--all] [options]
+
+Sync the currently installed astrbot-git package into instance virtualenvs.
+Restart instance(s) and monitor stability.
+
+Options:
+  --all                  Sync and restart all instances
+  --stability-secs N     Seconds to monitor for stability (default: 60)
+  -h, --help             Show this help
+USAGE
+            exit 0
+            ;;
+        -*)
+            echo "❌ Error: Unknown option: $1" >&2
+            exit 1
+            ;;
+        *)
+            [ -n "$instance" ] && {
+                echo "❌ Error: Unexpected extra argument: $1" >&2
+                exit 1
+            }
+            instance="$1"
+            shift
+            ;;
+        esac
+    done
+
+    require_root
+
+    if [ "$all" -eq 1 ]; then
+        instances=$(iter_instances)
+        [ -z "$instances" ] && {
+            echo ">>> No instances found."
+            exit 0
+        }
+        echo ">>> Syncing and restarting all instances: $instances"
+    else
+        [ -z "$instance" ] && {
+            echo "❌ Error: Instance name or --all required." >&2
+            exit 1
+        }
+        instances="$instance"
+        require_instance
+        echo ">>> Syncing and restarting instance: $instance"
+    fi
+
+    echo ""
+    echo "[1/3] Checking installed package..."
+    if [ -f /opt/astrbot/.version ]; then
+        echo ">>> Using packaged AstrBot version: $(cat /opt/astrbot/.version)"
+    else
+        echo "⚠️  /opt/astrbot/.version not found. Sync will use the current /opt/astrbot contents."
+    fi
+
+    echo ""
+    echo "[2/3] Rebuilding venv and restarting instances..."
+    _update_instance() {
+        local inst="$1"
+        local venv_dir_path venv_backup_path had_backup=0
+        instance="$inst"
+        load_instance_config
+        if [ ! -d "$ASTRBOT_ROOT" ]; then
+            echo "⚠️  Instance $inst directory missing, skipping."
+            return 0
+        fi
+
+        venv_dir_path="$(venv_dir)"
+        venv_backup_path="${UPDATE_SNAPSHOT_DIR}/${inst}-venv-backup"
+
+        echo ">>> Rebuilding venv for: $inst"
+
+        # Backup current venv before nuking it
+        if [ "$UPDATE_AUTO_ROLLBACK" = "1" ] && [ -d "$venv_dir_path" ]; then
+            echo ">>> Backing up current venv..."
+            rm -rf "$venv_backup_path" 2>/dev/null || true
+            mkdir -p "$(dirname "$venv_backup_path")"
+            cp -a "$venv_dir_path" "$venv_backup_path"
+            had_backup=1
+        fi
+
+        rm -rf "$venv_dir_path"
+
+        if [ -L "/opt/astrbot/astrbot/dashboard/dist" ] && [ ! -e "/opt/astrbot/astrbot/dashboard/dist" ]; then
+            rm -f "/opt/astrbot/astrbot/dashboard/dist"
+            mkdir -p "/opt/astrbot/astrbot/dashboard/dist"
+        fi
+
+        if ! ensure_instance_env_synced 2>&1; then
+            echo "⚠️  Failed to sync environment for $inst"
+            _restore_venv_backup "$venv_dir_path" "$venv_backup_path"
+            return 1
+        fi
+
+        echo ">>> Stopping: $inst"
+        systemctl stop "astrbot@$inst" 2>/dev/null || true
+
+        echo ">>> Starting: $inst"
+        if ! systemctl start "astrbot@$inst"; then
+            echo "⚠️  Failed to start $inst"
+            _restore_venv_backup "$venv_dir_path" "$venv_backup_path"
+            return 1
+        fi
+
+        # Keep backup around for stability monitoring; cleaned up after
+        return 0
+    }
+
+    _restore_venv_backup() {
+        local dst="$1" src="$2"
+        if [ -d "$src" ]; then
+            echo ">>> Restoring previous venv from backup..."
+            rm -rf "$dst" 2>/dev/null || true
+            cp -a "$src" "$dst"
+        fi
+        rm -rf "$src" 2>/dev/null || true
+    }
+
+    _cleanup_venv_backup() {
+        local inst
+        for inst in "$@"; do
+            rm -rf "${UPDATE_SNAPSHOT_DIR}/${inst}-venv-backup" 2>/dev/null || true
+        done
+    }
+
+    FAILED_INSTANCES=""
+    for inst in $instances; do
+        if ! _update_instance "$inst"; then
+            FAILED_INSTANCES="$FAILED_INSTANCES $inst"
+        fi
+    done
+
+    echo ""
+    echo "[3/3] Monitoring stability..."
+    if [ "$stability_secs" -gt 0 ]; then
+        echo ">>> Waiting ${stability_secs}s to ensure instances stay active..."
+        for i in $(seq 1 "$stability_secs"); do
+            sleep 1
+            for inst in $instances; do
+                if echo "$FAILED_INSTANCES" | grep -qw "$inst"; then
+                    continue
+                fi
+                if ! systemctl is-active --quiet "astrbot@$inst" 2>/dev/null; then
+                    echo "⚠️  Instance $inst crashed at ${i}s."
+                    # Rollback if backup exists
+                    bk_path="${UPDATE_SNAPSHOT_DIR}/${inst}-venv-backup"
+                    if [ "$UPDATE_AUTO_ROLLBACK" = "1" ] && [ -d "$bk_path" ]; then
+                        echo ">>> Rolling back venv for $inst..."
+                        vp="${SYSTEM_ROOT}/${inst}/.venv"
+                        rm -rf "$vp" 2>/dev/null || true
+                        cp -a "$bk_path" "$vp"
+                        rm -rf "$bk_path"
+                        echo ">>> Restarting $inst with previous venv..."
+                        systemctl start "astrbot@$inst" 2>/dev/null || true
+                        sleep 5
+                        if systemctl is-active --quiet "astrbot@$inst" 2>/dev/null; then
+                            echo ">>> Rollback succeeded — $inst is running on previous version."
+                            continue
+                        else
+                            echo "⚠️  Rollback also failed for $inst — manual intervention needed."
+                        fi
+                    fi
+                    FAILED_INSTANCES="$FAILED_INSTANCES $inst"
+                fi
+            done
+            if [ -n "$FAILED_INSTANCES" ]; then
+                break
+            fi
+        done
+    fi
+
+    # Clean up remaining backups for successful instances
+    _cleanup_venv_backup $instances
+
+    echo ""
+    if [ -n "$FAILED_INSTANCES" ]; then
+        echo "=== ❌ Update failed for some instances ==="
+        echo "    Failed instances:$FAILED_INSTANCES"
+        exit 1
+    else
+        echo "=== ✅ Update complete ==="
+    fi
+    ;;
+
+# ── help / unknown ─────────────────────────────────────────────────────────────
+-h | --help | "")
+    print_help
+    exit 0
+    ;;
 *)
     print_help
     exit 1

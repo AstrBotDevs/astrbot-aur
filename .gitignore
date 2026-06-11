@@ -1,15 +1,16 @@
-/src/
-/pkg/
-
-/*.pkg.tar.*
-
-/*.tar.gz
-/*.tar.xz
-
-/dist/
-/.uv/
-/*.egg-info/
 
 astrbot-git
 data
+/dist/
+/*.egg-info/
+# Ignore test directories and instances
 *.lock
+/pkg/
+/*.pkg.tar.*
+/src/
+/*.tar.gz
+/*.tar.xz
+/test_*
+tmp
+/.uv/
+AstrBot
