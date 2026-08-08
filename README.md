@@ -199,11 +199,25 @@ sudo astrbotctl sync bot1
 
 ### Packaging
 
-This repository is the GitHub mirror for the AUR package. `./update.sh` pushes
-the reviewed `master` branch to GitHub, clones
-`ssh://aur@aur.archlinux.org/astrbot-git.git` into a disposable directory, and
-creates a signed snapshot commit in the AUR repository's independent history.
-Both non-force pushes are dry-run before GitHub is published, followed by AUR.
+This repository is the GitHub source for the AUR package. `./update.sh` checks
+and pushes the reviewed `master` branch to GitHub. The protected
+`aur-production` GitHub Actions environment then publishes the package to
+`ssh://aur@aur.archlinux.org/astrbot-git.git` in its independent history.
+
+Create a dedicated, least-privilege SSH key for AUR publishing and add its
+public key to the maintainer's AUR account. Store the private key and verified
+AUR host-key lines as GitHub Environment Secrets, never repository files. The
+workflow reads exactly `AUR_SSH_PRIVATE_KEY` and `AUR_SSH_KNOWN_HOSTS`; it does
+not discover host keys at runtime.
+
+Configure and verify the `aur-production` Environment with the GitHub CLI
+without printing either value:
+
+```bash
+gh secret set --env aur-production AUR_SSH_PRIVATE_KEY < /path/to/dedicated-aur-key
+gh secret set --env aur-production AUR_SSH_KNOWN_HOSTS < /path/to/verified-aur-known-hosts
+gh secret list --env aur-production
+```
 
 The AUR snapshot contains exactly these files:
 
@@ -215,6 +229,10 @@ The AUR snapshot contains exactly these files:
 - `astrbot@.service`
 - `tmpl.conf`
 - `no-dashboard-password-in-startup-log.patch`
+
+Only these regular root files are copied and staged. The AUR has no subdirectories.
+Existing unknown root files in the independent AUR repository are preserved
+rather than deleted.
 
 Before publishing manually, regenerate `.SRCINFO`:
 
@@ -402,11 +420,23 @@ sudo astrbotctl sync bot1
 
 ### 打包维护
 
-这个仓库是 AUR 软件包的 GitHub 镜像。`./update.sh` 会将已审核的
-`master` 分支推送到 GitHub，并把
-`ssh://aur@aur.archlinux.org/astrbot-git.git` 克隆到一次性目录，在 AUR
-仓库的独立历史中创建签名快照提交。两个非强制推送都会提前 dry-run，
-实际发布顺序为 GitHub、AUR。
+这个仓库是 AUR 软件包的 GitHub 源仓库。`./update.sh` 会检查并推送已审核的
+`master` 分支；受保护的 GitHub Actions `aur-production` Environment 随后把
+软件包发布到 `ssh://aur@aur.archlinux.org/astrbot-git.git` 的独立历史。
+
+请创建一把权限最小化的 AUR 发布专用 SSH 密钥，并把公钥添加到维护者的 AUR
+账户。私钥和已核验的 AUR 主机密钥行必须保存为 GitHub Environment Secrets，
+绝不能写入仓库文件。工作流只读取 `AUR_SSH_PRIVATE_KEY` 和
+`AUR_SSH_KNOWN_HOSTS`，不会在运行时自动探测主机密钥。
+
+可用 GitHub CLI 配置并核验 `aur-production` Environment，命令不会打印
+Secret 的值：
+
+```bash
+gh secret set --env aur-production AUR_SSH_PRIVATE_KEY < /path/to/dedicated-aur-key
+gh secret set --env aur-production AUR_SSH_KNOWN_HOSTS < /path/to/verified-aur-known-hosts
+gh secret list --env aur-production
+```
 
 AUR 快照严格包含以下文件：
 
@@ -418,6 +448,9 @@ AUR 快照严格包含以下文件：
 - `astrbot@.service`
 - `tmpl.conf`
 - `no-dashboard-password-in-startup-log.patch`
+
+工作流只复制和暂存这些根目录普通文件。AUR 快照不包含子目录；AUR 独立仓库
+中已有的未知根目录文件会被保留，不会被删除。
 
 如需手动发布，发布前重新生成 `.SRCINFO`：
 

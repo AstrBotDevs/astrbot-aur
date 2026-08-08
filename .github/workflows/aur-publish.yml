@@ -1,0 +1,155 @@
+name: Publish AUR package
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .SRCINFO
+      - PKGBUILD
+      - astrbot-git.install
+      - astrbotctl
+      - astrbotctl.functions
+      - astrbot@.service
+      - tmpl.conf
+      - no-dashboard-password-in-startup-log.patch
+      - .github/workflows/aur-publish.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aur-production
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.ref == 'refs/heads/master' }}
+    environment: aur-production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Publish independent AUR snapshot
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_SSH_KNOWN_HOSTS: ${{ secrets.AUR_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +x
+
+          readonly AUR_REPO_URL="ssh://aur@aur.archlinux.org/astrbot-git.git"
+          AUR_FILES=(
+            ".SRCINFO"
+            "PKGBUILD"
+            "astrbot-git.install"
+            "astrbotctl"
+            "astrbotctl.functions"
+            "astrbot@.service"
+            "tmpl.conf"
+            "no-dashboard-password-in-startup-log.patch"
+          )
+          readonly -a AUR_FILES
+
+          fail() {
+            printf 'Error: %s\n' "$*" >&2
+            exit 1
+          }
+
+          is_manifest_asset() {
+            local candidate="$1"
+            local allowed
+            for allowed in "${AUR_FILES[@]}"; do
+              [[ "$candidate" == "$allowed" ]] && return 0
+            done
+            return 1
+          }
+
+          reject_clone_root_shape() {
+            local unexpected_entry
+            unexpected_entry="$(find -P "$aur_repo_dir" -mindepth 1 -maxdepth 1 \
+              \( -type l -o \( -type d ! -name .git \) \) -print -quit)"
+            [[ -z "$unexpected_entry" ]] || fail "AUR repository contains a forbidden top-level symlink or directory: $(basename -- "$unexpected_entry")"
+          }
+
+          : "${AUR_SSH_PRIVATE_KEY:?AUR_SSH_PRIVATE_KEY is required}"
+          : "${AUR_SSH_KNOWN_HOSTS:?AUR_SSH_KNOWN_HOSTS is required}"
+          [[ -n "${RUNNER_TEMP:-}" && -d "$RUNNER_TEMP" ]] || fail 'RUNNER_TEMP is unavailable'
+
+          runner_temp="$(realpath -e -- "$RUNNER_TEMP")"
+          readonly runner_temp
+          publish_tmp_dir=""
+
+          cleanup() {
+            local tmp_dir="${publish_tmp_dir:-}"
+            [[ -n "$tmp_dir" && -d "$tmp_dir" ]] || return 0
+            [[ "$(dirname -- "$tmp_dir")" == "$runner_temp" ]] || return 0
+            [[ "$(basename -- "$tmp_dir")" == astrbot-git-aur.???????? ]] || return 0
+            rm -rf -- "$publish_tmp_dir"
+          }
+          trap cleanup EXIT
+
+          umask 077
+          publish_tmp_dir="$(mktemp -d -- "$RUNNER_TEMP/astrbot-git-aur.XXXXXXXX")"
+          readonly publish_tmp_dir
+          readonly ssh_key_path="$publish_tmp_dir/aur_key"
+          readonly known_hosts_path="$publish_tmp_dir/known_hosts"
+          readonly aur_repo_dir="$publish_tmp_dir/repository"
+
+          install -m 600 /dev/null "$ssh_key_path"
+          install -m 600 /dev/null "$known_hosts_path"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" >"$ssh_key_path"
+          printf '%s\n' "$AUR_SSH_KNOWN_HOSTS" >"$known_hosts_path"
+          unset AUR_SSH_PRIVATE_KEY AUR_SSH_KNOWN_HOSTS
+          [[ -s "$ssh_key_path" && -s "$known_hosts_path" ]] || fail 'SSH secret files are empty'
+
+          export GIT_SSH_COMMAND="ssh -i $ssh_key_path -o BatchMode=yes -o IdentitiesOnly=yes -o PasswordAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$known_hosts_path -o LogLevel=ERROR"
+
+          for asset in "${AUR_FILES[@]}"; do
+            [[ "$asset" != */* ]] || fail "manifest entries must be root filenames: $asset"
+            source_path="$GITHUB_WORKSPACE/$asset"
+            [[ -f "$source_path" && ! -L "$source_path" ]] || fail "required source asset is missing, symlinked, or non-regular: $asset"
+          done
+
+          git clone --branch master --single-branch -- "$AUR_REPO_URL" "$aur_repo_dir"
+          [[ -d "$aur_repo_dir/.git" && ! -L "$aur_repo_dir/.git" ]] || fail 'AUR clone metadata is invalid'
+          [[ -z "$(git -C "$aur_repo_dir" status --porcelain=v1 --untracked-files=all)" ]] || fail 'fresh AUR clone is not clean'
+          reject_clone_root_shape
+
+          for asset in "${AUR_FILES[@]}"; do
+            cp --remove-destination --preserve=mode,timestamps -- \
+              "$GITHUB_WORKSPACE/$asset" "$aur_repo_dir/$asset"
+          done
+          git -C "$aur_repo_dir" add -- "${AUR_FILES[@]}"
+          reject_clone_root_shape
+
+          mapfile -d '' staged_files < <(git -C "$aur_repo_dir" diff --cached --name-only -z)
+          for staged_file in "${staged_files[@]}"; do
+            [[ "$staged_file" != */* ]] || fail "refusing to stage a subpath: $staged_file"
+            is_manifest_asset "$staged_file" || fail "refusing to stage an out-of-manifest file: $staged_file"
+          done
+          for asset in "${AUR_FILES[@]}"; do
+            if git -C "$aur_repo_dir" show ":$asset" | \
+              grep -Eq -- '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----'; then
+              fail "refusing to publish private-key material in: $asset"
+            fi
+          done
+
+          git -C "$aur_repo_dir" diff --quiet || fail 'AUR clone has unexpected unstaged changes'
+          if git -C "$aur_repo_dir" diff --cached --quiet; then
+            echo 'AUR snapshot is already current.'
+            exit 0
+          fi
+
+          git -C "$aur_repo_dir" config user.name 'github-actions[bot]'
+          git -C "$aur_repo_dir" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          source_commit="${GITHUB_SHA:0:12}"
+          git -C "$aur_repo_dir" commit --signoff \
+            -m "chore: publish astrbot-git from $source_commit"
+          [[ -z "$(git -C "$aur_repo_dir" status --porcelain=v1 --untracked-files=all)" ]] || fail 'AUR clone is not clean after commit'
+
+          git -C "$aur_repo_dir" push --dry-run origin HEAD:master
+          git -C "$aur_repo_dir" push origin HEAD:master
