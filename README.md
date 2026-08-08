@@ -32,7 +32,7 @@ long-running multi-bot deployments.
 - Stores instance data and Python virtualenvs under `/var/lib/astrbot/<name>`
 - Uses `uv` to build and refresh per-instance Python environments
 - Provides `astrbot@.service` for systemd-managed services
-- Includes helpers for backup, restore, updates, HTTPS certificates, and cleanup
+- Includes helpers for updates, HTTPS certificates, and cleanup; use the Dashboard for authenticated backup and restore
 
 ### Install
 
@@ -83,7 +83,6 @@ http://localhost:<port>
 
 ```bash
 sudo astrbotctl init bot1
-sudo astrbotctl init -f /path/to/backup.zip bot2
 sudo astrbotctl cp bot1 bot3
 sudo astrbotctl rm bot3
 sudo astrbotctl reset bot1
@@ -110,17 +109,19 @@ astrbotctl cli bot1 plug install <plugin_repo>
 Manage dashboard credentials:
 
 ```bash
-astrbotctl admin -u admin -p 'new-password' bot1
+sudo astrbotctl password bot1
 ```
 
-Back up and restore:
+The command prompts twice on the controlling terminal and must be run before
+the first service start. To change the dashboard username at the same time:
 
 ```bash
-astrbotctl export bot1
-astrbotctl export -o /tmp -d sha256 bot1
-astrbotctl import bot1 /path/to/backup.zip
-astrbotctl import -y bot1 /path/to/backup.zip
+sudo astrbotctl password --username admin bot1
 ```
+
+Back up and restore through the authenticated Dashboard. Restore is destructive;
+`astrbotctl init -f`, `astrbotctl export`, and `astrbotctl import` are retired
+because current upstream AstrBot no longer provides the backup CLI.
 
 Refresh instance environments after a package upgrade:
 
@@ -233,7 +234,7 @@ systemd 模板服务和按实例隔离的运行环境，适合在同一台机器
 - 实例数据和 Python 虚拟环境保存在 `/var/lib/astrbot/<实例名>`
 - 使用 `uv` 创建和刷新每个实例的 Python 环境
 - 提供 `astrbot@.service`，可用 systemd 管理实例
-- 提供备份、恢复、更新、HTTPS 证书和缓存清理辅助命令
+- 提供更新、HTTPS 证书和缓存清理辅助命令；经认证的备份和恢复请使用 Dashboard
 
 ### 安装
 
@@ -283,7 +284,6 @@ http://localhost:<端口>
 
 ```bash
 sudo astrbotctl init bot1
-sudo astrbotctl init -f /path/to/backup.zip bot2
 sudo astrbotctl cp bot1 bot3
 sudo astrbotctl rm bot3
 sudo astrbotctl reset bot1
@@ -310,17 +310,19 @@ astrbotctl cli bot1 plug install <插件仓库>
 管理控制台账号密码：
 
 ```bash
-astrbotctl admin -u admin -p 'new-password' bot1
+sudo astrbotctl password bot1
 ```
 
-备份和恢复：
+该命令会在当前终端中隐藏输入并要求确认，必须在首次启动服务前执行。如需同时
+修改控制台用户名：
 
 ```bash
-astrbotctl export bot1
-astrbotctl export -o /tmp -d sha256 bot1
-astrbotctl import bot1 /path/to/backup.zip
-astrbotctl import -y bot1 /path/to/backup.zip
+sudo astrbotctl password --username admin bot1
 ```
+
+请通过 Dashboard 中经认证的流程执行备份和恢复。恢复会覆盖现有数据；由于当前
+上游 AstrBot 已移除备份 CLI，`astrbotctl init -f`、`astrbotctl export` 和
+`astrbotctl import` 已退役。
 
 软件包升级后刷新实例环境：
 
