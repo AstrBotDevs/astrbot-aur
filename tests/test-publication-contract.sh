@@ -8,6 +8,7 @@ script="$repo_dir/update.sh"
 readme="$repo_dir/README.md"
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+[[ -x "$script" ]] || fail 'update.sh must remain executable for direct publication'
 require_literal() {
     grep -Fq -- "$1" "$2" || fail "$3"
 }
