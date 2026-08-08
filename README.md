@@ -199,17 +199,22 @@ sudo astrbotctl sync bot1
 
 ### Packaging
 
-This repository is the GitHub mirror for the AUR package. Publishing is handled
-by GitHub Actions via `.github/workflows/aur-publish.yml`.
+This repository is the GitHub mirror for the AUR package. `./update.sh` pushes
+the reviewed `master` branch to GitHub, clones
+`ssh://aur@aur.archlinux.org/astrbot-git.git` into a disposable directory, and
+creates a signed snapshot commit in the AUR repository's independent history.
+Both non-force pushes are dry-run before GitHub is published, followed by AUR.
 
-The workflow publishes these AUR files:
+The AUR snapshot contains exactly these files:
 
+- `.SRCINFO`
 - `PKGBUILD`
 - `astrbot-git.install`
 - `astrbotctl`
 - `astrbotctl.functions`
 - `astrbot@.service`
 - `tmpl.conf`
+- `no-dashboard-password-in-startup-log.patch`
 
 Before publishing manually, regenerate `.SRCINFO`:
 
@@ -397,17 +402,22 @@ sudo astrbotctl sync bot1
 
 ### 打包维护
 
-这个仓库是 AUR 软件包的 GitHub 镜像。发布由 GitHub Actions 中的
-`.github/workflows/aur-publish.yml` 处理。
+这个仓库是 AUR 软件包的 GitHub 镜像。`./update.sh` 会将已审核的
+`master` 分支推送到 GitHub，并把
+`ssh://aur@aur.archlinux.org/astrbot-git.git` 克隆到一次性目录，在 AUR
+仓库的独立历史中创建签名快照提交。两个非强制推送都会提前 dry-run，
+实际发布顺序为 GitHub、AUR。
 
-workflow 会发布这些 AUR 文件：
+AUR 快照严格包含以下文件：
 
+- `.SRCINFO`
 - `PKGBUILD`
 - `astrbot-git.install`
 - `astrbotctl`
 - `astrbotctl.functions`
 - `astrbot@.service`
 - `tmpl.conf`
+- `no-dashboard-password-in-startup-log.patch`
 
 如需手动发布，发布前重新生成 `.SRCINFO`：
 
