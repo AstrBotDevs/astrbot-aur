@@ -3,22 +3,20 @@
 pkgname=astrbot-git
 _pkgname=astrbot
 _srcname=AstrBot
-pkgver=4.27.2.r18.g30e20318c
-pkgrel=6
+pkgver=4.27.2.r26.ga9bb8a64c
+pkgrel=1
 
 pkgver() {
     # shellcheck disable=SC2154 # makepkg provides srcdir.
     cd "$srcdir/$_srcname" || return 1
-    # Fetch all tags from origin/master to support describe on all release tags
-    git fetch --tags origin master 2>/dev/null || true
-    # Try annotated tags first; fall back to commit-based versioning
+    # Keep VCS versions reproducible across clone configurations and Git versions.
     local _ver
-    if _ver=$(git describe --long --tags 2>/dev/null); then
+    if _ver=$(git describe --long --tags --abbrev=9 2>/dev/null); then
         # Normalize git describe output like v4.22.2-66-gaa279f0c4 -> 4.22.2.r66.gaa279f0c4
         printf '%s' "$_ver" | sed 's/\([^-]*-g\)/r\1/;s/-/./g' | sed 's/^v//g'
     else
         # No tags reachable — use commit count + short hash
-        printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+        printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=9 HEAD)"
     fi
 }
 
@@ -48,7 +46,7 @@ sha256sums=('SKIP'
     'SKIP'
     'SKIP'
     'SKIP'
-    '116de96099fbf0e438e79037a85aaf6eb802f9b54d7117be601b7f78c787d5d4')
+    'd5081794e8b9bdf1330a4227c9b8aa492c15a88bef930afac4301006ed703663')
 
 install=astrbot-git.install
 

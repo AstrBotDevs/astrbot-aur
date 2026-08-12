@@ -24,8 +24,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Validate package metadata and source preparation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            archlinux:base-devel \
+            bash -euo pipefail -c '
+              pacman -Sy --noconfirm git python
+              useradd --create-home builder
+              chown -R builder:builder /workspace
+              su builder -s /bin/bash -c '"'"'
+                makepkg --printsrcinfo | diff -u .SRCINFO -
+                makepkg --nobuild --nodeps --force
+              '"'"'
+            '
+
   publish:
     if: ${{ github.ref == 'refs/heads/master' }}
+    needs: validate
     environment: aur-production
     runs-on: ubuntu-latest
     steps:

@@ -49,8 +49,12 @@ require_literal '  contents: read' "$workflow" 'workflow repository permission i
 require_literal 'concurrency:' "$workflow" 'workflow concurrency guard is missing'
 require_literal '  group: aur-production' "$workflow" 'workflow concurrency is not serialized for AUR production'
 require_literal '  cancel-in-progress: false' "$workflow" 'workflow may cancel an in-flight AUR publication'
+require_literal '  validate:' "$workflow" 'package validation job is missing'
+require_literal '      - name: Validate package metadata and source preparation' "$workflow" 'package validation step is missing'
+require_literal '                makepkg --printsrcinfo | diff -u .SRCINFO -' "$workflow" 'package metadata validation is missing'
+require_literal '                makepkg --nobuild --nodeps --force' "$workflow" 'source preparation validation is missing'
 require_literal '    environment: aur-production' "$workflow" 'AUR secrets are not protected by the aur-production Environment'
-[[ "$(sed -n '/^jobs:/,$p' "$workflow" | grep -Ec '^  [a-zA-Z0-9_-]+:$')" -eq 1 ]] || fail 'workflow must have exactly one protected job'
+[[ "$(sed -n '/^jobs:/,$p' "$workflow" | grep -Ec '^  [a-zA-Z0-9_-]+:$')" -eq 2 ]] || fail 'workflow must have exactly one validation job and one protected publication job'
 require_literal "    if: \${{ github.ref == 'refs/heads/master' }}" "$workflow" 'publication job is not restricted to the master branch ref'
 [[ "$(grep -Fxc "    if: \${{ github.ref == 'refs/heads/master' }}" "$workflow")" -eq 1 ]] || fail 'master-only publication guard must be an exact job-level condition'
 publish_line="$(grep -Fn '  publish:' "$workflow" | cut -d: -f1)"
