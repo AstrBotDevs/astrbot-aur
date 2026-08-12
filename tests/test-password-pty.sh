@@ -31,7 +31,11 @@ command -v expect >/dev/null
 test -f "$expect_script"
 
 bash "$controller" init "$instance"
-for path in "$root" "$root/home" "$root/data" "$root/data/config" "$root/.astrbot" "$root/.venv"; do
+[[ ! -e "$root/home" ]] || {
+    printf 'FAIL: init created the obsolete legacy home directory\n' >&2
+    exit 1
+}
+for path in "$root" "$root/data" "$root/data/config" "$root/.astrbot" "$root/.venv"; do
     test "$(stat -c '%U:%G' "$path")" = astrbot:astrbot
 done
 

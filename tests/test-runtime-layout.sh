@@ -9,7 +9,7 @@ fi
 instance="codex-layout-$(date +%s)-$$"
 readonly instance
 readonly root="/var/lib/astrbot/${instance}"
-readonly home_root="${root}/home"
+readonly legacy_home_root="${root}/home"
 readonly conf="/etc/astrbot/${instance}.conf"
 readonly unit="astrbot@${instance}.service"
 login_request=""
@@ -192,12 +192,20 @@ astrbotctl init "$instance"
 
 [[ -f "${root}/.astrbot" ]] ||
     fail "init did not create the required root marker ${root}/.astrbot"
-[[ ! -e "${home_root}/.astrbot" ]] ||
-    fail "init incorrectly created the root marker below isolated HOME"
+[[ ! -e "$legacy_home_root" ]] ||
+    fail "init incorrectly created the obsolete legacy home directory"
 assert_owner astrbot:astrbot \
-    "$root" "$home_root" "$root/data" "$root/data/config" \
+    "$root" "$root/data" "$root/data/config" \
     "$root/.astrbot" "$root/.venv"
 assert_owner root:root "$conf"
+
+paths_output="$(astrbotctl paths "$instance")"
+grep -Fxq "HOME_DIR=$root" <<<"$paths_output" ||
+    fail "paths reports a separate HOME directory"
+grep -Fxq "WORKING_DIR=$root" <<<"$paths_output" ||
+    fail "paths reports a separate working directory"
+grep -Fxq "DATA_DIR=$root/data" <<<"$paths_output" ||
+    fail "paths does not expose the canonical AstrBot data directory"
 
 printf 'Verifying start is blocked until a dashboard password is configured...\n'
 systemctl start "$unit" >/dev/null 2>&1 || true

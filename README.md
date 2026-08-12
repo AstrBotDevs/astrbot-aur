@@ -163,8 +163,16 @@ instance config, installs a deploy hook, and restarts the systemd service.
 | `/etc/astrbot/tmpl.conf` | Template used by `astrbotctl init` and `reset` |
 | `/etc/astrbot/<name>.conf` | Per-instance config |
 | `/etc/astrbot/certs/<name>` | Per-instance certificate copies |
-| `/var/lib/astrbot/<name>` | Per-instance data, home directory, and virtualenv |
+| `/var/lib/astrbot/<name>` | Single per-instance runtime root (`HOME`, XDG directories, `data/`, and virtualenv) |
+| `/var/lib/astrbot/<name>/data` | AstrBot application data and configuration (`cmd_config.json`, plugins, backups, WebUI assets) |
+| `/var/lib/astrbot/<name>/.cache` | Per-instance XDG/uv cache |
 | `/var/cache/astrbot` | Shared package/runtime cache |
+
+Older package versions could create an empty `/var/lib/astrbot/<name>/home`
+directory. On the first runtime operation after this update, empty legacy
+directories are removed and non-conflicting legacy entries are moved into the
+instance root. Non-empty conflicts are preserved and reported rather than
+overwritten.
 
 ### Troubleshooting
 
@@ -386,8 +394,14 @@ sudo astrbotctl certbot bot1
 | `/etc/astrbot/tmpl.conf` | `astrbotctl init` 和 `reset` 使用的配置模板 |
 | `/etc/astrbot/<实例名>.conf` | 单个实例的配置文件 |
 | `/etc/astrbot/certs/<实例名>` | 单个实例的证书副本 |
-| `/var/lib/astrbot/<实例名>` | 单个实例的数据、HOME 目录和虚拟环境 |
+| `/var/lib/astrbot/<实例名>` | 每个实例唯一的运行根目录（`HOME`、XDG 目录、`data/` 和虚拟环境） |
+| `/var/lib/astrbot/<实例名>/data` | AstrBot 业务数据与配置（`cmd_config.json`、插件、备份和 WebUI 资源） |
+| `/var/lib/astrbot/<实例名>/.cache` | 每个实例独立的 XDG/uv 缓存 |
 | `/var/cache/astrbot` | 共享包缓存和运行时缓存 |
+
+旧版本可能会创建空的 `/var/lib/astrbot/<实例名>/home` 目录。本次更新后，
+实例第一次执行运行时操作时，会删除空的旧目录，并把没有路径冲突的旧内容
+移动到实例根目录；如果目标路径已有非空内容，则保留旧内容并提示，不会覆盖。
 
 ### 故障排除
 
