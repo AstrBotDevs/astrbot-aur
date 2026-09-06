@@ -1,0 +1,3 @@
+# Match the source-aware checks in scripts/check.sh when linting in an editor.
+external-sources=true
+source-path=SCRIPTDIR

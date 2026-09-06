@@ -14,3 +14,5 @@ data
 tmp
 /.uv/
 AstrBot
+# Local agent memory is not part of the package source.
+/.memsearch/

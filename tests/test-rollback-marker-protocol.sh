@@ -9,15 +9,22 @@ fi
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf -- "$tmp_dir"' EXIT
-fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+fail() {
+    printf 'FAIL: %s\n' "$*" >&2
+    exit 1
+}
 
+# Shared implementation is also checked by scripts/check.sh.
 # shellcheck source=../astrbotctl.functions
 . "$repo_dir/astrbotctl.functions"
+# shellcheck disable=SC2034 # Used by the sourced sync helper.
 instance=marker
 ASTRBOT_ROOT="$tmp_dir/root"
 APP_DIR="$tmp_dir/app"
 mkdir -p "$ASTRBOT_ROOT/.venv/bin" "$APP_DIR"
-: >"$ASTRBOT_ROOT/.venv/bin/python"; : >"$ASTRBOT_ROOT/.venv/bin/astrbot"; : >"$ASTRBOT_ROOT/.venv/pyvenv.cfg"
+: >"$ASTRBOT_ROOT/.venv/bin/python"
+: >"$ASTRBOT_ROOT/.venv/bin/astrbot"
+: >"$ASTRBOT_ROOT/.venv/pyvenv.cfg"
 chmod +x "$ASTRBOT_ROOT/.venv/bin/python" "$ASTRBOT_ROOT/.venv/bin/astrbot"
 printf 'old-version\n' >"$ASTRBOT_ROOT/.venv/.astrbot-app-version"
 printf 'version=old-version\nreason=sync_failure\n' >"$ASTRBOT_ROOT/.venv/.astrbot-rollback"
@@ -26,9 +33,16 @@ printf 'new-version\n' >"$APP_DIR/.version"
 chown -R astrbot:astrbot "$ASTRBOT_ROOT/.venv"
 
 calls=0
-setup_runtime_env() { UV_PROJECT_ENVIRONMENT="$ASTRBOT_ROOT/.venv"; runtime_root="$ASTRBOT_ROOT"; }
+# shellcheck disable=SC2034 # Replaces the runtime setup contract consumed by sync.
+setup_runtime_env() {
+    UV_PROJECT_ENVIRONMENT="$ASTRBOT_ROOT/.venv"
+    runtime_root="$ASTRBOT_ROOT"
+}
 _ensure_app_dir() { :; }
-run_astrbot_env_cmd() { calls=$((calls + 1)); return "${RUNNER_STATUS:-0}"; }
+run_astrbot_env_cmd() {
+    calls=$((calls + 1))
+    return "${RUNNER_STATUS:-0}"
+}
 _runuser_with_env() { return 0; }
 
 RUNNER_STATUS=42

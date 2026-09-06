@@ -17,6 +17,7 @@ APP_DIR="$tmp_dir/app"
 CACHE_DIR="$tmp_dir/cache"
 mkdir -p "$SYSTEM_ROOT" "$CONFIG_DIR" "$APP_DIR" "$CACHE_DIR"
 
+# shellcheck source=../astrbotctl.functions
 . "$repo_dir/astrbotctl.functions"
 
 assert_path() {
@@ -45,7 +46,7 @@ assert_path "$XDG_DATA_HOME" "$ASTRBOT_ROOT/.local/share" 'XDG data'
 assert_path "$XDG_STATE_HOME" "$ASTRBOT_ROOT/.local/state" 'XDG state'
 [[ -f "$ASTRBOT_ROOT/data/legacy.txt" ]] || exit 1
 [[ ! -e "$ASTRBOT_ROOT/home" ]] || exit 1
-[[ "$(sed -n '1p' "$ASTRBOT_ROOT/.env")" == "HOME=$ASTRBOT_ROOT" ]] || exit 1
+[[ "$(bash -c '. "$1"; printf "%s" "$HOME"' bash "$ASTRBOT_ROOT/.env")" == "$ASTRBOT_ROOT" ]] || exit 1
 
 instance=conflict
 ASTRBOT_ROOT="$SYSTEM_ROOT/$instance"

@@ -8,19 +8,32 @@ script="$repo_dir/update.sh"
 workflow="$repo_dir/.github/workflows/aur-publish.yml"
 readme="$repo_dir/README.md"
 
-fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
 require_literal() {
-    grep -Fq -- "$1" "$2" || fail "$3"
+  grep -Fq -- "$1" "$2" || fail "$3"
 }
 forbid_regex() {
-    local pattern="$1"
-    shift
-    local message="${*: -1}"
-    local -a files=("${@:1:$#-1}")
-    if rg -n -- "$pattern" "${files[@]}" >/dev/null; then
-        fail "$message"
-    fi
+  local pattern="$1"
+  shift
+  local message="${*: -1}" status
+  local -a files=("${@:1:$#-1}")
+  if rg --no-config --text -n -- "$pattern" "${files[@]}" >/dev/null; then
+    fail "$message"
+  else
+    status=$?
+    [[ "$status" -eq 1 ]] || fail "rg scan failed (exit $status): $message"
+  fi
 }
+
+for dependency in git rg grep sed cut mktemp rm; do
+  command -v "$dependency" >/dev/null || fail "$dependency is required"
+done
+
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf -- "$tmp_dir"' EXIT
 
 [[ -x "$script" ]] || fail 'update.sh must remain executable'
 [[ -f "$workflow" && ! -L "$workflow" ]] || fail 'protected AUR workflow is missing or not a regular file'
@@ -51,6 +64,9 @@ require_literal '  group: aur-production' "$workflow" 'workflow concurrency is n
 require_literal '  cancel-in-progress: false' "$workflow" 'workflow may cancel an in-flight AUR publication'
 require_literal '  validate:' "$workflow" 'package validation job is missing'
 require_literal '      - name: Validate package metadata and source preparation' "$workflow" 'package validation step is missing'
+require_literal 'pacman -Syu --noconfirm git python shellcheck gettext ripgrep libarchive' "$workflow" 'validation dependencies are missing or use a partial system upgrade'
+require_literal '                set -Eeuo pipefail' "$workflow" 'builder shell does not fail closed'
+require_literal '                bash scripts/check.sh' "$workflow" 'publication does not require the non-root validation entry point'
 require_literal '                makepkg --printsrcinfo | diff -u .SRCINFO -' "$workflow" 'package metadata validation is missing'
 require_literal '                makepkg --nobuild --nodeps --force' "$workflow" 'source preparation validation is missing'
 require_literal '    environment: aur-production' "$workflow" 'AUR secrets are not protected by the aur-production Environment'
@@ -63,7 +79,7 @@ environment_line="$(grep -Fn '    environment: aur-production' "$workflow" | cut
 [[ "$publish_line" -lt "$guard_line" && "$guard_line" -lt "$environment_line" ]] || fail 'master-only guard must protect the Environment before secrets can be consumed'
 
 if grep -Eq '^    env:' "$workflow"; then
-    fail 'AUR secrets are exposed to the checkout step through job-level env'
+  fail 'AUR secrets are exposed to the checkout step through job-level env'
 fi
 [[ "$(grep -Ec '^        env:$' "$workflow")" -eq 1 ]] || fail 'AUR secrets are not scoped to the publication step'
 require_literal '          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}' "$workflow" 'workflow does not obtain the private key from the exact GitHub Secret'
@@ -108,9 +124,12 @@ require_literal 'cp --remove-destination --preserve=mode,timestamps --' "$workfl
 [[ "$(grep -Ec '^[[:space:]]+cp[[:space:]]' "$workflow")" -eq 1 ]] || fail 'workflow contains a copy operation outside the manifest loop'
 require_literal 'git -C "$aur_repo_dir" add -- "${AUR_FILES[@]}"' "$workflow" 'AUR staging is not restricted to the manifest'
 [[ "$(grep -Fc 'git -C "$aur_repo_dir" add ' "$workflow")" -eq 1 ]] || fail 'workflow contains an additional AUR staging operation'
-require_literal 'git -C "$aur_repo_dir" diff --cached --name-only -z' "$workflow" 'workflow does not inspect the complete staged path set'
+require_literal 'git -C "$aur_repo_dir" diff --cached --name-only -z >"$staged_paths_path" || fail' "$workflow" 'staged path enumeration does not fail closed'
+require_literal "mapfile -d '' -t staged_files <\"\$staged_paths_path\"" "$workflow" 'workflow does not read the checked staged path list'
 require_literal '[[ "$staged_file" != */* ]]' "$workflow" 'workflow does not reject staged subpaths'
 require_literal 'refusing to stage an out-of-manifest file' "$workflow" 'workflow does not reject out-of-manifest staged changes'
+require_literal 'git -C "$aur_repo_dir" show ":$asset" >"$staged_blob_path" || fail' "$workflow" 'staged blob reads do not fail closed'
+require_literal '[[ "$scan_status" -eq 1 ]] || fail' "$workflow" 'staged blob scan errors do not fail closed'
 require_literal 'PRIVATE KEY' "$workflow" 'workflow does not scan staged blobs for private-key markers'
 [[ "$(grep -Fc 'for asset in "${AUR_FILES[@]}"; do' "$workflow")" -eq 3 ]] || fail 'manifest validation, copy, and staged-source secret scan are not all enforced'
 require_literal 'git -C "$aur_repo_dir" diff --cached --quiet' "$workflow" 'workflow does not exit cleanly when AUR already matches'
@@ -133,7 +152,7 @@ require_literal 'git push origin master:master' "$script" 'local publisher does 
 require_literal 'aur-production' "$script" 'local publisher does not explain protected workflow publication'
 
 for secret_name in AUR_SSH_PRIVATE_KEY AUR_SSH_KNOWN_HOSTS; do
-    [[ "$(grep -Fc -- "\`$secret_name\`" "$readme")" -ge 2 ]] || fail "README does not document $secret_name in both languages"
+  [[ "$(grep -Fc -- "\`$secret_name\`" "$readme")" -ge 2 ]] || fail "README does not document $secret_name in both languages"
 done
 [[ "$(grep -Fic 'dedicated' "$readme")" -ge 1 ]] || fail 'README does not require a dedicated AUR key'
 [[ "$(grep -Fc '专用' "$readme")" -ge 1 ]] || fail 'Chinese README does not require a dedicated AUR key'
@@ -150,13 +169,21 @@ require_literal 'gh secret set --env aur-production AUR_SSH_KNOWN_HOSTS < /path/
 require_literal 'gh secret list --env aur-production' "$readme" 'README does not show non-secret Environment verification with gh'
 
 for asset in .SRCINFO PKGBUILD astrbot-git.install astrbotctl astrbotctl.functions 'astrbot@.service' tmpl.conf no-dashboard-password-in-startup-log.patch; do
-    [[ "$(grep -Fc -- "\`$asset\`" "$readme")" -ge 2 ]] || fail "README does not list $asset in both package asset lists"
+  [[ "$(grep -Fc -- "\`$asset\`" "$readme")" -ge 2 ]] || fail "README does not list $asset in both package asset lists"
 done
 
-if rg -n --hidden --glob '!.git/**' --glob '!tests/test-publication-contract.sh' -- \
+# Check tracked working-tree files, never untracked build output or an upstream
+# checkout. Capture the producer status before consuming the NUL-delimited list.
+git -C "$repo_dir" ls-files --cached -z >"$tmp_dir/tracked-paths" || fail 'could not list tracked repository files'
+mapfile -d '' -t tracked_files <"$tmp_dir/tracked-paths"
+[[ "${#tracked_files[@]}" -gt 0 ]] || fail 'repository has no tracked files to scan'
+for tracked_file in "${tracked_files[@]}"; do
+  [[ "$tracked_file" != tests/test-publication-contract.sh ]] || continue
+  tracked_path="$repo_dir/$tracked_file"
+  [[ -f "$tracked_path" && -r "$tracked_path" && ! -L "$tracked_path" ]] || fail "tracked file is missing, unreadable, or non-regular: $tracked_file"
+  forbid_regex \
     '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----|(^|[[:space:]])(ssh-rsa|ssh-ed25519|ecdsa-[^[:space:]]+)[[:space:]]+[A-Za-z0-9+/]{40,}' \
-    "$repo_dir" >/dev/null; then
-    fail 'repository contains private-key or AUR known-host key material'
-fi
+    "$tracked_path" 'repository contains private-key or AUR known-host key material'
+done
 
 printf 'PASS: protected workflow publishes the exact root-only AUR snapshot without repository secrets.\n'

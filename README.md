@@ -88,6 +88,10 @@ sudo astrbotctl rm bot3
 sudo astrbotctl reset bot1
 ```
 
+`cp` copies instance data and creates a new configuration with a free port.
+It does not reuse the source virtualenv: Python entrypoints contain absolute
+paths, so the destination builds its own environment on its next run.
+
 Service commands:
 
 ```bash
@@ -132,7 +136,7 @@ sudo astrbotctl update bot1
 sudo astrbotctl update --all
 ```
 
-Clean caches:
+Clean caches (virtualenv cleanup refuses active or maintenance-locked instances):
 
 ```bash
 sudo astrbotctl clean
@@ -205,7 +209,36 @@ sudo rm -rf /var/lib/astrbot/bot1/.venv
 sudo astrbotctl sync bot1
 ```
 
+### Development checks
+
+Run the safe check entrypoint as a regular user:
+
+```bash
+bash scripts/check.sh
+```
+
+Install the test tools on Arch:
+
+```bash
+sudo pacman -S --needed base-devel shellcheck python git gettext ripgrep libarchive
+```
+
+The check runs Bash syntax validation, ShellCheck, local source checksums,
+`.SRCINFO` comparison when `makepkg` is available, and an explicit list of
+rootless regression suites. PR and master-branch CI run the same check
+in an Arch container. These tests use temporary fixtures and mock service
+commands; they do not publish packages or contact running instances.
+
+Do not run `tests/*.sh` as a blanket loop. Other tests may invoke `sudo`, change
+real services, or require a particular installed package. Run those only in a
+disposable Arch VM. `test-pkgrel4-red-regressions.sh` documents a historical
+broken release and is not a current-release acceptance test.
+
 ### Packaging
+
+After changing a local package asset, update its `sha256sums` entry in `PKGBUILD`
+and regenerate `.SRCINFO` with `makepkg --printsrcinfo > .SRCINFO` before running
+the checks. Only the floating upstream Git source uses `SKIP`.
 
 This repository is the GitHub source for the AUR package. `./update.sh` checks
 and pushes the reviewed `master` branch to GitHub. The protected
@@ -320,6 +353,9 @@ sudo astrbotctl rm bot3
 sudo astrbotctl reset bot1
 ```
 
+`cp` 会复制实例数据，并为新配置分配空闲端口。Python 入口脚本包含绝对路径，
+因此新实例不会复用源实例的虚拟环境，而是在下次运行时重建。
+
 服务命令：
 
 ```bash
@@ -364,7 +400,7 @@ sudo astrbotctl update bot1
 sudo astrbotctl update --all
 ```
 
-清理缓存：
+清理缓存（虚拟环境清理会跳过正在运行或被维护锁占用的实例，并返回失败状态）：
 
 ```bash
 sudo astrbotctl clean
@@ -432,7 +468,34 @@ sudo rm -rf /var/lib/astrbot/bot1/.venv
 sudo astrbotctl sync bot1
 ```
 
+### 开发检查
+
+以普通用户运行安全检查入口：
+
+```bash
+bash scripts/check.sh
+```
+
+在 Arch 上安装测试工具：
+
+```bash
+sudo pacman -S --needed base-devel shellcheck python git gettext ripgrep libarchive
+```
+
+该入口检查 Bash 语法、ShellCheck、本地源文件校验和、有 `makepkg` 时的
+`.SRCINFO` 一致性，并执行明确列出的非特权回归测试。PR 和 master 分支的 CI
+在 Arch 容器中运行相同检查。测试只使用临时夹具和模拟服务命令，不发布软件包，
+也不接触正在运行的实例。
+
+不要循环执行全部 `tests/*.sh`：其他测试可能自动调用 `sudo`、修改真实服务，
+或要求特定已安装版本。这些测试只能在一次性 Arch 虚拟机中运行。
+`test-pkgrel4-red-regressions.sh` 用于复现历史版本缺陷，不是当前版本的验收测试。
+
 ### 打包维护
+
+修改本地打包文件后，先更新 `PKGBUILD` 中对应的 `sha256sums`，再执行
+`makepkg --printsrcinfo > .SRCINFO` 更新元数据，最后运行检查。只有浮动的上游
+Git 源使用 `SKIP`。
 
 这个仓库是 AUR 软件包的 GitHub 源仓库。`./update.sh` 会检查并推送已审核的
 `master` 分支；受保护的 GitHub Actions `aur-production` Environment 随后把

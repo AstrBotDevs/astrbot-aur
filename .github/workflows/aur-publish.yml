@@ -39,10 +39,12 @@ jobs:
             --workdir /workspace \
             archlinux:base-devel \
             bash -euo pipefail -c '
-              pacman -Sy --noconfirm git python
+              pacman -Syu --noconfirm git python shellcheck gettext ripgrep libarchive
               useradd --create-home builder
               chown -R builder:builder /workspace
               su builder -s /bin/bash -c '"'"'
+                set -Eeuo pipefail
+                bash scripts/check.sh
                 makepkg --printsrcinfo | diff -u .SRCINFO -
                 makepkg --nobuild --nodeps --force
               '"'"'
@@ -123,6 +125,8 @@ jobs:
           readonly ssh_key_path="$publish_tmp_dir/aur_key"
           readonly known_hosts_path="$publish_tmp_dir/known_hosts"
           readonly aur_repo_dir="$publish_tmp_dir/repository"
+          readonly staged_paths_path="$publish_tmp_dir/staged-paths"
+          readonly staged_blob_path="$publish_tmp_dir/staged-blob"
 
           install -m 600 /dev/null "$ssh_key_path"
           install -m 600 /dev/null "$known_hosts_path"
@@ -141,7 +145,8 @@ jobs:
 
           git clone --branch master --single-branch -- "$AUR_REPO_URL" "$aur_repo_dir"
           [[ -d "$aur_repo_dir/.git" && ! -L "$aur_repo_dir/.git" ]] || fail 'AUR clone metadata is invalid'
-          [[ -z "$(git -C "$aur_repo_dir" status --porcelain=v1 --untracked-files=all)" ]] || fail 'fresh AUR clone is not clean'
+          clone_status="$(git -C "$aur_repo_dir" status --porcelain=v1 --untracked-files=all)" || fail 'could not inspect fresh AUR clone'
+          [[ -z "$clone_status" ]] || fail 'fresh AUR clone is not clean'
           reject_clone_root_shape
 
           for asset in "${AUR_FILES[@]}"; do
@@ -151,15 +156,21 @@ jobs:
           git -C "$aur_repo_dir" add -- "${AUR_FILES[@]}"
           reject_clone_root_shape
 
-          mapfile -d '' staged_files < <(git -C "$aur_repo_dir" diff --cached --name-only -z)
+          git -C "$aur_repo_dir" diff --cached --name-only -z >"$staged_paths_path" || fail 'could not enumerate staged AUR paths'
+          mapfile -d '' -t staged_files <"$staged_paths_path"
           for staged_file in "${staged_files[@]}"; do
             [[ "$staged_file" != */* ]] || fail "refusing to stage a subpath: $staged_file"
             is_manifest_asset "$staged_file" || fail "refusing to stage an out-of-manifest file: $staged_file"
           done
           for asset in "${AUR_FILES[@]}"; do
-            if git -C "$aur_repo_dir" show ":$asset" | \
-              grep -Eq -- '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----'; then
+            # Read the complete blob first: grep must not hide a failed producer
+            # or turn an early match into SIGPIPE under pipefail.
+            git -C "$aur_repo_dir" show ":$asset" >"$staged_blob_path" || fail "could not read staged asset: $asset"
+            if grep -aE -- '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----' "$staged_blob_path" >/dev/null; then
               fail "refusing to publish private-key material in: $asset"
+            else
+              scan_status=$?
+              [[ "$scan_status" -eq 1 ]] || fail "could not scan staged asset: $asset (exit $scan_status)"
             fi
           done
 
@@ -167,6 +178,9 @@ jobs:
           if git -C "$aur_repo_dir" diff --cached --quiet; then
             echo 'AUR snapshot is already current.'
             exit 0
+          else
+            diff_status=$?
+            [[ "$diff_status" -eq 1 ]] || fail 'could not compare staged AUR snapshot'
           fi
 
           git -C "$aur_repo_dir" config user.name 'github-actions[bot]'
@@ -174,7 +188,8 @@ jobs:
           source_commit="${GITHUB_SHA:0:12}"
           git -C "$aur_repo_dir" commit --signoff \
             -m "chore: publish astrbot-git from $source_commit"
-          [[ -z "$(git -C "$aur_repo_dir" status --porcelain=v1 --untracked-files=all)" ]] || fail 'AUR clone is not clean after commit'
+          clone_status="$(git -C "$aur_repo_dir" status --porcelain=v1 --untracked-files=all)" || fail 'could not inspect AUR clone after commit'
+          [[ -z "$clone_status" ]] || fail 'AUR clone is not clean after commit'
 
           git -C "$aur_repo_dir" push --dry-run origin HEAD:master
           git -C "$aur_repo_dir" push origin HEAD:master

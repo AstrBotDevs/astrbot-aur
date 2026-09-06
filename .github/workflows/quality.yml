@@ -1,0 +1,37 @@
+name: Code quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container: archlinux:base-devel
+    steps:
+      - name: Install test tools
+        run: pacman -Syu --noconfirm git python shellcheck gettext ripgrep libarchive
+
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Run checks without privileges
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          useradd --create-home checker
+          chown -R checker:checker "$GITHUB_WORKSPACE"
+          su checker -s /bin/bash -c 'bash scripts/check.sh'

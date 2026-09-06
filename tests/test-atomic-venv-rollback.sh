@@ -10,19 +10,24 @@ repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf -- "$tmp_dir"' EXIT
 
-fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+fail() {
+    printf 'FAIL: %s\n' "$*" >&2
+    exit 1
+}
 make_venv() {
     local path="$1" version="$2"
     mkdir -p "$path/bin"
-    : >"$path/bin/python"; : >"$path/bin/astrbot"; : >"$path/pyvenv.cfg"
+    : >"$path/bin/python"
+    : >"$path/bin/astrbot"
+    : >"$path/pyvenv.cfg"
     chmod +x "$path/bin/python" "$path/bin/astrbot"
     printf '%s\n' "$version" >"$path/.astrbot-app-version"
     chown -R astrbot:astrbot "$path"
 }
 
+# Shared implementation is also checked by scripts/check.sh.
 # shellcheck source=../astrbotctl.functions
 . "$repo_dir/astrbotctl.functions"
-instance=atomic
 ASTRBOT_ROOT="$tmp_dir/root"
 mkdir -p "$ASTRBOT_ROOT" "$tmp_dir/cache"
 destination="$ASTRBOT_ROOT/.venv"

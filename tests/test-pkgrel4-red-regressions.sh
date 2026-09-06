@@ -13,10 +13,14 @@ tmp_dir="$(mktemp -d)"
 
 cleanup() { rm -rf -- "$tmp_dir"; }
 trap cleanup EXIT
-fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+fail() {
+    printf 'FAIL: %s\n' "$*" >&2
+    exit 1
+}
 
 make_fixture() {
-    local label="$1" root="$tmp_dir/$label/root" etc_dir="$tmp_dir/$label/etc" app_dir="$tmp_dir/$label/app"
+    local label="$1"
+    local root="$tmp_dir/$label/root" etc_dir="$tmp_dir/$label/etc" app_dir="$tmp_dir/$label/app"
     mkdir -p "$root/.venv/bin" "$etc_dir" "$tmp_dir/$label/cache" "$app_dir"
     : >"$root/.venv/bin/python"
     : >"$root/.venv/bin/astrbot"
@@ -33,6 +37,7 @@ test_delete_copy_restore_red() {
     fake_bin="$tmp_dir/$label/bin"
     make_fixture "$label"
     mkdir -p "$fake_bin"
+    # shellcheck disable=SC2016 # $1 belongs to the emitted stub, not this test.
     printf '#!/usr/bin/env bash\ncase "$1" in is-active) exit 1 ;; *) exit 1 ;; esac\n' >"$fake_bin/systemctl"
     printf '#!/usr/bin/env bash\nexit 42\n' >"$fake_bin/uv"
     cat >"$fake_bin/cp" <<'EOF'
