@@ -22,7 +22,8 @@
 
 It packages the upstream `master` branch under `/opt/astrbot` and provides
 `astrbotctl`, a systemd template unit, and per-instance runtime isolation for
-long-running multi-bot deployments.
+long-running multi-bot deployments. The tracked `master` branch can include
+upstream beta releases; it is not pinned to the latest stable release.
 
 ### Features
 
@@ -288,7 +289,8 @@ Linux AUR 软件包。
 
 它会把上游 `master` 分支安装到 `/opt/astrbot`，并提供 `astrbotctl`、
 systemd 模板服务和按实例隔离的运行环境，适合在同一台机器上长期运行多个
-机器人实例。
+机器人实例。该包跟踪的 `master` 分支可能包含上游 beta 版本，不固定在最新
+稳定版。
 
 ### 功能特性
 

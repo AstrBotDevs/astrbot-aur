@@ -35,6 +35,7 @@ fi
 # Do not replace this with tests/*.sh: some legacy tests operate on real
 # services, automatically elevate privileges, or expect an old installed build.
 rootless_tests=(
+    test-install-hooks.sh
     test-cli-validation.sh
     test-clean-venvs.sh
     test-config-helpers.sh
