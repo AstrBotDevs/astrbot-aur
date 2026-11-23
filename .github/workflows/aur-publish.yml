@@ -30,7 +30,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Validate package metadata and source preparation
+      - name: Validate metadata and build package
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -46,7 +46,7 @@ jobs:
                 set -Eeuo pipefail
                 bash scripts/check.sh
                 makepkg --printsrcinfo | diff -u .SRCINFO -
-                makepkg --nobuild --nodeps --force
+                makepkg --nodeps --force
               '"'"'
             '
 

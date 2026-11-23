@@ -3,7 +3,7 @@
 pkgname=astrbot-git
 _pkgname=astrbot
 _srcname=AstrBot
-pkgver=4.29.0.beta.1.r6.g9d4f52346
+pkgver=4.30.0.beta.1.r26.g841295fa9
 pkgrel=1
 
 pkgver() {
@@ -23,7 +23,7 @@ pkgver() {
 pkgdesc="Agentic IM Chatbot infrastructure with systemd multi-instance support"
 arch=('any')
 url="https://github.com/AstrBotDevs/AstrBot"
-license=('AGPL-3.0-only')
+license=('AGPL-3.0-or-later')
 
 depends=('python>=3.12' 'uv' 'util-linux' 'gettext')
 makedepends=('git')
@@ -158,39 +158,34 @@ PY
 check() {
     # shellcheck disable=SC2154 # makepkg provides srcdir.
     cd "$srcdir/$_srcname" || return 1
-    local _errcnt=0
-    local _prompt_file="astrbot/core/astr_main_agent_resources.py"
 
-    if [ -f astrbot/core/tools/prompts.py ]; then
-        _prompt_file="astrbot/core/tools/prompts.py"
-    fi
+    # Parse the shipped source without importing runtime dependencies or writing bytecode.
+    python - <<'PYTHON' || return 1
+import ast
+from pathlib import Path
 
-    # Syntax check: compile all .py files in key modules
-    python -m py_compile astrbot/core/astr_main_agent_resources.py || _errcnt=$((_errcnt + 1))
-    python -m py_compile astrbot/dashboard/server.py || _errcnt=$((_errcnt + 1))
-    python -m py_compile astrbot/core/astr_agent_tool_exec.py || _errcnt=$((_errcnt + 1))
-    python -m py_compile "$_prompt_file" || _errcnt=$((_errcnt + 1))
-    python -m py_compile astrbot/core/core_lifecycle.py || _errcnt=$((_errcnt + 1))
-    python -m py_compile astrbot/core/db/sqlite.py || _errcnt=$((_errcnt + 1))
+sources = sorted(Path("astrbot").rglob("*.py"))
+if not sources:
+    raise SystemExit("AstrBot Python source is missing")
+for path in sources:
+    compile(path.read_bytes(), str(path), "exec")
 
-    # Symbol checks (曾炸过的 import 路径)
-    grep -q "class AstrBotDashboard" astrbot/dashboard/server.py || _errcnt=$((_errcnt + 1))
-    if grep -R --include="*.py" -q "BACKGROUND_TASK_WOKE_USER_PROMPT" astrbot/core; then
-        grep -q "BACKGROUND_TASK_WOKE_USER_PROMPT" "$_prompt_file" || _errcnt=$((_errcnt + 1))
-    fi
-    if grep -R --include="*.py" -q "CONVERSATION_HISTORY_INJECT_PREFIX" astrbot/core; then
-        grep -q "CONVERSATION_HISTORY_INJECT_PREFIX" "$_prompt_file" || _errcnt=$((_errcnt + 1))
-    fi
-    grep -q "class AstrBotCoreLifecycle" astrbot/core/core_lifecycle.py || _errcnt=$((_errcnt + 1))
+entrypoints = {
+    "astrbot/dashboard/server.py": "AstrBotDashboard",
+    "astrbot/core/core_lifecycle.py": "AstrBotCoreLifecycle",
+    "astrbot/core/astr_agent_runtime/runtime.py": "AstrAgentRuntime",
+    "astrbot/core/astr_agent_runtime/tool_executor.py": "FunctionToolExecutor",
+}
+for filename, name in entrypoints.items():
+    tree = ast.parse(Path(filename).read_bytes(), filename=filename)
+    if not any(isinstance(node, ast.ClassDef) and node.name == name for node in tree.body):
+        raise SystemExit(f"Missing required entrypoint {name} in {filename}")
+PYTHON
+
     if grep -Fq 'Initial password: {generated_password}' astrbot/dashboard/server.py; then
-        echo "❌ dashboard credential patch did not remove password interpolation"
-        _errcnt=$((_errcnt + 1))
+        error "dashboard credential patch did not remove password interpolation"
+        return 1
     fi
-
-    [ "$_errcnt" -eq 0 ] || {
-        echo "❌ check() failed with $_errcnt error(s)"
-        exit 1
-    }
 }
 
 package() {

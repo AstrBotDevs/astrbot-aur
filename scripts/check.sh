@@ -47,6 +47,7 @@ rootless_tests=(
     test-retired-backup-cli.sh
     test-venv-maintenance-lock.sh
     test-vcs-security-gate.sh
+    test-upstream-runtime-check.sh
     test-local-source-integrity.sh
     test-package-contract-behavior.sh
     test-publication-contract.sh

@@ -31,7 +31,7 @@ import sys
 
 workflow = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines(keepends=True)
 outputs = {
-    "Validate package metadata and source preparation": "validate.sh",
+    "Validate metadata and build package": "validate.sh",
     "Publish independent AUR snapshot": "publish.sh",
 }
 found = set()
@@ -101,8 +101,9 @@ case "$name" in
                 # Output can be correct even when the producer fails.
                 [[ "$SCENARIO" != metadata-error ]] || exit 42
                 ;;
-            '--nobuild --nodeps --force')
-                printf 'prepare\n' >>"$TRACE"
+            '--nodeps --force')
+                printf 'build\n' >>"$TRACE"
+                [[ "$SCENARIO" != build-error ]] || exit 43
                 ;;
             *) reject ;;
         esac
@@ -247,17 +248,22 @@ assert_refused() {
 
 run_workflow validate-success validate
 [[ "$workflow_status" -eq 0 ]] || fail 'matching metadata did not validate'
-[[ "$(<"$trace")" == $'check\nmetadata\nprepare' ]] || fail 'validation did not run check, metadata, and prepare in order'
+[[ "$(<"$trace")" == $'check\nmetadata\nbuild' ]] || fail 'validation did not run check, metadata, and build in order'
 
 run_workflow check-error validate
 [[ "$workflow_status" -ne 0 ]] || fail 'failed non-root checks did not stop validation'
-[[ "$(<"$trace")" == check ]] || fail 'failed non-root checks continued to metadata or prepare'
+[[ "$(<"$trace")" == check ]] || fail 'failed non-root checks continued to metadata or build'
 
 for scenario in metadata-mismatch metadata-error; do
     run_workflow "$scenario" validate
     [[ "$workflow_status" -ne 0 ]] || fail "$scenario did not stop validation"
-    [[ "$(<"$trace")" == $'check\nmetadata' ]] || fail "$scenario did not reach metadata after successful checks, or continued to prepare"
+    [[ "$(<"$trace")" == $'check\nmetadata' ]] || fail "$scenario did not reach metadata after successful checks, or continued to build"
 done
+
+run_workflow build-error validate
+[[ "$workflow_status" -eq 43 ]] || fail 'failed package build did not stop validation with its exit code'
+[[ "$(<"$trace")" == $'check\nmetadata\nbuild' ]] || fail 'build failure did not follow successful preflight checks'
+assert_no_publication build-error
 
 run_workflow publish-success publish
 [[ "$workflow_status" -eq 0 ]] || fail 'clean staged blobs did not reach simulated publication'
